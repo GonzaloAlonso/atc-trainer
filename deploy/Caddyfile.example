@@ -1,0 +1,6 @@
+# Add a site block for Visor next to your existing ones (same hostname, its own port).
+# The Caddy container must publish that port ("8444:8444") and share the "proxy" network.
+your-host.example.com:8444 {
+    encode zstd gzip
+    reverse_proxy visor:8000
+}

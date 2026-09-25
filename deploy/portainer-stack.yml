@@ -1,0 +1,28 @@
+# Visor ATC — Portainer stack (Stacks → Add stack → Web editor).
+# Runs behind an existing Caddy container on the external "proxy" network; no host ports.
+# Set VISOR_ADMIN_PASSWORD (and optionally OpenSky credentials) under "Environment variables".
+# The image is private: add ghcr.io under Portainer "Registries" (GitHub user + read:packages token).
+# © 2026 Gonzalo Alonso. All rights reserved.
+services:
+  visor:
+    image: ghcr.io/gonzaloalonso/visor:1.0.2
+    container_name: visor
+    restart: unless-stopped
+    networks:
+      - proxy
+    environment:
+      VISOR_ADMIN_USER: ${VISOR_ADMIN_USER:-admin}
+      VISOR_ADMIN_PASSWORD: ${VISOR_ADMIN_PASSWORD:-}
+      VISOR_COOKIE_SECURE: "true"      # always served over HTTPS by Caddy
+      VISOR_TRUST_PROXY: "1"           # real client IP from Caddy's X-Forwarded-For
+      OPENSKY_CLIENT_ID: ${OPENSKY_CLIENT_ID:-}
+      OPENSKY_CLIENT_SECRET: ${OPENSKY_CLIENT_SECRET:-}
+    volumes:
+      - visor-data:/data               # recordings + user accounts
+
+volumes:
+  visor-data:
+
+networks:
+  proxy:
+    external: true

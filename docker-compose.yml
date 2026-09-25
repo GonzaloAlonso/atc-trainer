@@ -5,11 +5,17 @@ services:
     # building locally: `docker compose pull && docker compose up -d`.
     image: ${VISOR_IMAGE:-visor-atc:latest}
     restart: unless-stopped
-    # Bound to localhost: put a reverse proxy (nginx, Caddy, ...) with TLS and authentication in
-    # front. Change to "8000:8000" only if the host is not reachable from the internet.
+    # Bound to localhost: publish it through a reverse proxy (nginx, Caddy, ...) with TLS.
+    # Use "8000:8000" to expose it directly (then sign-in happens over plain HTTP).
     ports:
       - "127.0.0.1:8000:8000"
     environment:
+      # First start only (empty user table): the admin account to create. Leave the password
+      # empty to get a generated one in `docker compose logs` (it must be changed at first login).
+      VISOR_ADMIN_USER: ${VISOR_ADMIN_USER:-admin}
+      VISOR_ADMIN_PASSWORD: ${VISOR_ADMIN_PASSWORD:-}
+      VISOR_SESSION_HOURS: ${VISOR_SESSION_HOURS:-168}
+      VISOR_COOKIE_SECURE: ${VISOR_COOKIE_SECURE:-auto}
       OPENSKY_CLIENT_ID: ${OPENSKY_CLIENT_ID:-}
       OPENSKY_CLIENT_SECRET: ${OPENSKY_CLIENT_SECRET:-}
       JEV_ENDPOINT: ${JEV_ENDPOINT:-}

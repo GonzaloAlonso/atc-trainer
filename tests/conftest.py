@@ -9,12 +9,20 @@ _TMP = tempfile.mkdtemp(prefix="visor-tests-")
 os.environ["VISOR_DATA_DIR"] = _TMP
 os.environ.setdefault("VISOR_NAVDATA_DIR", os.path.join(_TMP, "navdata"))  # missing -> no fixes
 os.environ["VISOR_RECORD"] = "0"
+os.environ["VISOR_ADMIN_USER"] = "admin"
+os.environ["VISOR_ADMIN_PASSWORD"] = "admin-password-123"
 os.environ.pop("OPENSKY_CLIENT_ID", None)
 os.environ.pop("OPENSKY_CLIENT_SECRET", None)
 
 import pytest  # noqa: E402
 
+import atc.auth  # noqa: E402
+from atc import config  # noqa: E402
 from atc.store import Store  # noqa: E402
+
+atc.auth.PBKDF2_ITERATIONS = 1000   # fast hashing in tests (hashes store their iteration count)
+
+ADMIN = ("admin", "admin-password-123")
 
 FT = 0.3048
 KT = 0.514444
@@ -87,3 +95,27 @@ def engine(scenario_store):
     e = Engine(store, FakeNav())
     e.reset("replay", t0)
     return e
+
+
+@pytest.fixture
+def fresh_paths(tmp_path, monkeypatch):
+    """Point the app at an empty data directory (traffic + users)."""
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "traffic.db")
+    monkeypatch.setattr(config, "USERS_DB_PATH", tmp_path / "users.db")
+    return tmp_path
+
+
+def login(client, username, password):
+    r = client.post("/api/auth/login", json={"username": username, "password": password})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+@pytest.fixture
+def client(fresh_paths):
+    """TestClient signed in as the bootstrap admin."""
+    from fastapi.testclient import TestClient
+    from atc.api import create_app
+    with TestClient(create_app()) as c:
+        login(c, *ADMIN)
+        yield c

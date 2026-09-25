@@ -8,6 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="css/style.css" />
+  <link rel="stylesheet" href="css/pages.css" />
   <script type="importmap">
     {
       "imports": {
@@ -44,6 +45,16 @@
     <div id="score" class="score"></div>
     <div class="seg" id="style-seg"><button data-style="radar">Radar</button><button data-style="satellite">Satellite</button></div>
     <button id="btn-settings" class="icon" title="Display settings">⚙</button>
+    <div class="user-menu">
+      <button id="user-btn" class="user-btn" title="Account"><span class="dot"></span><span id="user-name">…</span> ▾</button>
+      <div id="user-pop" class="menu hidden">
+        <div id="user-role" class="menu-head"></div>
+        <button id="menu-password">Change password</button>
+        <a id="menu-admin" href="/admin" class="hidden">Manage users</a>
+        <button id="menu-about">About Visor ATC</button>
+        <button id="menu-logout">Sign out</button>
+      </div>
+    </div>
   </header>
 
   <div id="settings" class="pop hidden">
@@ -133,8 +144,43 @@
     </form>
   </footer>
 
-  <div id="statusbar"><span id="rec-status"></span><span id="attribution"></span></div>
+  <div id="statusbar"><span><button id="version-link" class="linkish" title="About Visor ATC"></button> <span id="rec-status"></span></span><span id="attribution"></span></div>
   <div id="toast" class="hidden"></div>
+
+  <dialog id="about-dialog" class="dialog about">
+    <div class="about-head">
+      <div class="brand big"><span class="logo"></span>VISOR<span class="sub">ATC</span></div>
+      <button type="button" class="icon" id="about-close" aria-label="Close">×</button>
+    </div>
+    <p id="about-desc" class="dim"></p>
+    <h3>Build</h3>
+    <dl id="about-build" class="kv"></dl>
+    <h3>Runtime</h3>
+    <dl id="about-runtime" class="kv"></dl>
+    <div class="about-copy">
+      <div id="about-copyright"></div>
+      <div id="about-credits"></div>
+    </div>
+    <details>
+      <summary>Data &amp; third-party software</summary>
+      <ul id="about-third"></ul>
+    </details>
+  </dialog>
+
+  <dialog id="pw-dialog" class="dialog">
+    <form id="pw-form" class="stack" autocomplete="off">
+      <h2>Change password</h2>
+      <label>Current password <input id="pw-current" type="password" required autocomplete="current-password" /></label>
+      <label>New password <input id="pw-new" type="password" minlength="10" required autocomplete="new-password" /></label>
+      <label>Repeat new password <input id="pw-new2" type="password" minlength="10" required autocomplete="new-password" /></label>
+      <p class="hint">At least 10 characters. Your other sessions will be signed out.</p>
+      <p id="pw-error" class="form-error"></p>
+      <div class="dialog-actions">
+        <button type="button" id="pw-cancel" class="ghost-btn">Cancel</button>
+        <button type="submit" class="primary">Change password</button>
+      </div>
+    </form>
+  </dialog>
 
   <script type="module" src="js/main.js"></script>
 </body>

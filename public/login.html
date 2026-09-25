@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Visor ATC · Sign in</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+  <link rel="stylesheet" href="css/pages.css" />
+</head>
+<body class="page auth-page">
+  <div class="radar-bg" aria-hidden="true"><div class="sweep"></div></div>
+
+  <main class="auth-card">
+    <div class="brand big"><span class="logo"></span>VISOR<span class="sub">ATC</span></div>
+
+    <form id="login-form" class="stack" autocomplete="on">
+      <h1>Sign in to the working position</h1>
+      <label>Username <input id="username" name="username" autocomplete="username" required autofocus /></label>
+      <label>Password <input id="password" name="password" type="password" autocomplete="current-password" required /></label>
+      <p id="login-error" class="form-error" role="alert"></p>
+      <button class="primary" type="submit">Sign in</button>
+    </form>
+
+    <form id="change-form" class="stack hidden" autocomplete="off">
+      <h1>Choose a new password</h1>
+      <p class="dim">Your password must be changed before you continue.</p>
+      <label id="current-wrap">Current password <input id="current" type="password" autocomplete="current-password" /></label>
+      <label>New password <input id="new-password" type="password" autocomplete="new-password" minlength="10" required /></label>
+      <label>Repeat new password <input id="new-password-2" type="password" autocomplete="new-password" minlength="10" required /></label>
+      <p class="hint">At least 10 characters.</p>
+      <p id="change-error" class="form-error" role="alert"></p>
+      <button class="primary" type="submit">Save and continue</button>
+    </form>
+  </main>
+
+  <footer class="auth-footer"><span id="footer-version">Visor ATC</span> · <span id="footer-copyright">© 2026 Gonzalo Alonso. All rights reserved.</span></footer>
+
+  <script type="module" src="js/login.js"></script>
+</body>
+</html>

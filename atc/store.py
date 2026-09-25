@@ -35,7 +35,8 @@ ROW_FIELDS = ("t", "icao24", "callsign", "country", "lat", "lon", "alt_ft",
 
 
 class Store:
-    def __init__(self, path=config.DB_PATH):
+    def __init__(self, path=None):
+        path = path or config.DB_PATH
         path.parent.mkdir(parents=True, exist_ok=True)
         self._db = sqlite3.connect(str(path), check_same_thread=False, isolation_level=None)
         self._db.execute("PRAGMA journal_mode=WAL")

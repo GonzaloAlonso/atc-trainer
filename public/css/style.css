@@ -212,9 +212,25 @@ table.traffic tr:hover td { background: rgba(92,200,255,0.08); }
 
 @media (max-width: 1720px) {
   .field { font-size: 0; gap: 4px; }
-  .brand .sub { display: none; }
+  body:not(.page) #top .brand .sub { display: none; }
 }
-@media (max-width: 1250px) {
+/* Top bar gives way progressively so the account menu always stays on screen. */
+#top > * { flex-shrink: 0; }
+#top .field { flex-shrink: 1; min-width: 0; }
+#top .field select { min-width: 72px; }
+@media (max-width: 1600px) {
+  #user-name { display: none; }
+  .score span:nth-child(n+4) { display: none; }      /* keep points, LoS, STCA */
+  #scenario { max-width: 120px; }
+  #sector { max-width: 140px; }
+}
+@media (max-width: 1400px) {
+  body:not(.page) #top .brand { font-size: 0; gap: 0; }
+  #date { display: none; }
+  .score span:nth-child(n+3) { display: none; }      /* points + LoS */
+  .seg button { padding: 5px 7px; }
+}
+@media (max-width: 1300px) {
   .score span:not(.pts) { display: none; }
 }
 @media (max-width: 1100px) {

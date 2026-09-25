@@ -559,7 +559,7 @@ class Engine:
         f = 0
         if ac.id in self._in_sector:
             f |= 1
-        if ac.controller == "human":
+        if ac.controller and ac.controller.startswith("human"):
             f |= 2
         elif ac.controller and ac.controller.startswith("ai:"):
             f |= 4

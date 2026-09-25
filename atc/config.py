@@ -17,6 +17,18 @@ EUROPE = {
     "lon_max": float(os.environ.get("VISOR_LON_MAX", 45.0)),
 }
 
+# --- Users & sessions ----------------------------------------------------------------------
+USERS_DB_PATH = DATA_DIR / "users.db"
+# Used only when the user table is empty (first start). Empty password -> a random one is
+# generated, printed to the log and must be changed at first login.
+ADMIN_USER = os.environ.get("VISOR_ADMIN_USER") or "admin"
+ADMIN_PASSWORD = os.environ.get("VISOR_ADMIN_PASSWORD") or None
+SESSION_HOURS = float(os.environ.get("VISOR_SESSION_HOURS") or 168)
+COOKIE_SECURE = (os.environ.get("VISOR_COOKIE_SECURE") or "auto").lower()   # auto | true | false
+# Behind exactly one reverse proxy (Caddy, nginx): take the client address from the last
+# X-Forwarded-For entry, which the proxy appends. Leave off when the app is exposed directly.
+TRUST_PROXY = (os.environ.get("VISOR_TRUST_PROXY") or "").lower() in ("1", "true", "yes")
+
 # --- OpenSky -------------------------------------------------------------------------------
 RECORD = os.environ.get("VISOR_RECORD", "1") != "0"   # 0 = don't poll OpenSky (tests, CI)
 OPENSKY_CLIENT_ID = os.environ.get("OPENSKY_CLIENT_ID")

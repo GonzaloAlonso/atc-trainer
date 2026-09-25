@@ -1,0 +1,22 @@
+Visor ATC — Proprietary Software
+
+Copyright (c) 2026 Gonzalo Alonso. All rights reserved.
+
+Gonzalo Alonso is the owner, creator and developer of this software, including its source
+code, documentation, container images and all associated files (the "Software").
+
+The Software is proprietary. No licence or other right is granted, expressly or by
+implication, to any person obtaining access to it. Without the prior written permission of
+the copyright holder you may not use, copy, modify, merge, publish, distribute, sublicense,
+sell, reverse engineer or create derivative works of the Software, in whole or in part.
+
+Access to the Software, for example through a source repository or a container registry,
+does not grant any of the rights listed above.
+
+Third-party components and data used by the Software (listed in the application's About
+dialog, among them three.js, FastAPI, Uvicorn, The OpenSky Network, OurAirports, Esri
+basemaps and AWS Terrain Tiles) remain subject to their own licences and terms of use.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED. IN NO
+EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR ITS USE.

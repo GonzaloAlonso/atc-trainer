@@ -1,5 +1,8 @@
 # Visor ATC
 
+© 2026 Gonzalo Alonso. All rights reserved. Owner, creator and developer: **Gonzalo Alonso**.
+Proprietary software, not open source. See [LICENSE](LICENSE).
+
 A 3D air traffic control working position for European airspace. It is part game, part proof of concept that a decision-making AI can control airspace.
 
 Real traffic recorded from the [OpenSky Network](https://openskynetwork.github.io/opensky-api/rest.html) is replayed as a living scenario. You, or an AI agent, take a sector and issue clearances. Each aircraft follows its recorded trajectory until it is cleared otherwise, then flies the clearance with a simple performance model.
@@ -9,7 +12,7 @@ Real traffic recorded from the [OpenSky Network](https://openskynetwork.github.i
 ```sh
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python scripts/fetch_navdata.py      # airports + navaids (OurAirports, public domain)
-.venv/bin/python server.py                     # http://localhost:8000   (API docs: /docs)
+VISOR_ADMIN_PASSWORD='choose-a-password' .venv/bin/python server.py   # http://localhost:8000 (API docs: /docs)
 ```
 
 The server records OpenSky snapshots of Europe (34–72°N, 25°W–45°E) into `data/traffic.db` and keeps a rolling 24 h window. Leave it running to build up history.
@@ -22,19 +25,52 @@ The server records OpenSky snapshots of Europe (34–72°N, 25°W–45°E) into 
 ## Deploy with Docker
 
 ```sh
-cp .env.example .env            # optional: OpenSky / Jev credentials
+cp .env.example .env            # set VISOR_ADMIN_PASSWORD, optionally OpenSky / Jev credentials
 docker compose up -d --build
 docker compose logs -f
 ```
 
 - The image contains the app and the airport and navaid data, which is downloaded at build time.
-- Recordings live in the `visor-data` volume (`/data`), so they survive rebuilds and upgrades. Keep the container running to build the 24 h history.
+- Recordings **and user accounts** live in the `visor-data` volume (`/data`), so they survive rebuilds and upgrades. Keep the container running to build the 24 h history.
 - Run **one** container. The simulation state is held in memory, so do not scale the service.
-- The container listens on `127.0.0.1:8000` of the host. Publish it through a reverse proxy on its own (sub)domain; the UI uses absolute `/api` and `/ws` paths, so a sub-path such as `/visor/` won't work.
+- The container listens on `127.0.0.1:8000` of the host. Publish it through a reverse proxy with TLS on its own (sub)domain; the UI uses absolute `/api` and `/ws` paths, so a sub-path such as `/visor/` won't work.
 
 To run a published release instead of building on the server, set `VISOR_IMAGE=ghcr.io/<owner>/<repo>:<version>` in `.env`, then run `docker compose pull && docker compose up -d`.
 
-**The app has no login.** Anyone who can reach it can issue clearances, reset the scenario or switch the AI on. Put authentication in front of it at the proxy. Example nginx site (TLS via certbot or similar):
+### Accounts
+
+Every page and API call requires a sign-in. The exceptions are the login page and `GET /api/health`, which is used by the Docker healthcheck.
+
+| Variable | Default | |
+|---|---|---|
+| `VISOR_ADMIN_USER` | `admin` | first admin account, created **only when there are no users yet** |
+| `VISOR_ADMIN_PASSWORD` | *(empty)* | empty → a random password is printed in `docker compose logs` and must be changed at first sign-in |
+| `VISOR_SESSION_HOURS` | `168` | session lifetime |
+| `VISOR_COOKIE_SECURE` | `auto` | `auto` marks the cookie Secure when the proxy sends `X-Forwarded-Proto: https`; or set `true` / `false` |
+
+After the first start the database is the source of truth: changing the variables does not modify existing accounts.
+
+- **Managing users:** admins use **Manage users** in the account menu (`/admin`) to add, edit and remove users. Available changes are role (*admin* or *controller*), password reset (optionally forcing a change at next sign-in), and disable/enable. Disabling a user, deleting them or resetting their password signs them out everywhere.
+- **Safeguards:** you can't delete, demote or disable yourself, and the last active admin can't be removed.
+- **Password hashing:** PBKDF2-SHA256 with 600,000 iterations.
+- **Throttling:** sign-in is throttled after 5 failures per user (20 per client address) within 5 minutes.
+- **Attribution:** clearances are recorded per user; the radio log shows `ATC·alice`.
+
+Recovery, e.g. a forgotten admin password:
+
+```sh
+docker compose exec visor python -m atc.auth list
+docker compose exec visor python -m atc.auth set-password admin              # prompts
+docker compose exec visor python -m atc.auth set-password ops --role admin --create
+```
+
+**AI agents** sign in with a regular account. `POST /api/auth/login` returns a `token` to send as `Authorization: Bearer <token>`. See [examples/agent_client.py](examples/agent_client.py). Agents may label their clearances `issuer: "ai:<name>"`; human clearances are always attributed to the signed-in user.
+
+### Reverse proxy
+
+Running behind an existing Caddy container managed by Portainer? Add `ghcr.io` under Portainer *Registries* (GitHub username + token with `read:packages`), then use [deploy/portainer-stack.yml](deploy/portainer-stack.yml) and [deploy/Caddyfile.example](deploy/Caddyfile.example) are ready-made for that. Set `VISOR_TRUST_PROXY=1` whenever the app sits behind exactly one reverse proxy, so login throttling uses the real client address.
+
+Example nginx site (TLS via certbot or similar):
 
 ```nginx
 server {
@@ -42,21 +78,22 @@ server {
     listen 443 ssl;
     # ssl_certificate ...; ssl_certificate_key ...;
 
-    auth_basic "Visor ATC";
-    auth_basic_user_file /etc/nginx/visor.htpasswd;   # htpasswd -c /etc/nginx/visor.htpasswd you
-
     location / {
         proxy_pass http://127.0.0.1:8000;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;         # WebSocket (/ws)
         proxy_set_header Connection "upgrade";
         proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;     # Secure session cookie
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_read_timeout 1h;
     }
 }
 ```
 
-With Caddy, `atc.example.com { basicauth { you <hash> }  reverse_proxy 127.0.0.1:8000 }` does the same, including TLS and WebSockets. Generate the hash with `caddy hash-password`.
+With Caddy, `atc.example.com { reverse_proxy 127.0.0.1:8000 }` is enough: it handles TLS and WebSockets and sends the forwarding headers.
+
+Always serve it over HTTPS on a public server; otherwise passwords and session cookies travel in clear text.
 
 ## Versioning, CI and releases
 
@@ -170,6 +207,23 @@ The built-in agents are `rules` (the reference baseline) and `jev`.
   - `traffic.js`: instanced aircraft, drop lines, vectors, trails
   - `overlay.js`: ATC symbology and data blocks
   - `ui.js`: panels, strip, radio, command line
+
+## About, build information and copyright
+
+The account menu has an **About Visor ATC** item; clicking the version in the status bar opens it too. It shows:
+
+- **Build:** version, release or development build, git commit (linked to the source), and build date.
+- **Runtime:** Python, platform, server libraries, the client's three.js revision, and server start time.
+- **Ownership:** the copyright notice and the credits for data and third-party software.
+
+The same information is available as JSON at `GET /api/about` (signed in).
+
+- **Release images:** the workflow bakes in the version, commit, build date and repository URL. They also appear as OCI labels: `org.opencontainers.image.{version,revision,created,source,authors,vendor}`.
+- **Local runs:** the version reads `dev`, and the commit is taken from git; uncommitted changes are flagged.
+
+Visor ATC is © 2026 Gonzalo Alonso, who is its owner, creator and developer. All rights reserved. It is proprietary software, not open source: no use, copying, modification or distribution without written permission (see [LICENSE](LICENSE)). The third-party data and libraries listed in the About dialog remain under their own licences and terms.
+
+The container images are published to a **private** GHCR package. Servers pull them with registry credentials: a GitHub token with `read:packages`, set in Portainer under *Registries*, or `docker login ghcr.io`.
 
 ## Limitations
 

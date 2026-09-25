@@ -36,6 +36,7 @@ jobs:
       version: ${{ steps.v.outputs.version }}
       tag: ${{ steps.v.outputs.tag }}
       release: ${{ steps.v.outputs.release }}
+      build_date: ${{ steps.v.outputs.build_date }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -67,6 +68,7 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
           echo "release=$release" >> "$GITHUB_OUTPUT"
+          echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
           echo "### Version \`$version\` (release: $release)" >> "$GITHUB_STEP_SUMMARY"
 
   test:
@@ -122,11 +124,13 @@ jobs:
           build-args: |
             VISOR_VERSION=${{ needs.version.outputs.version }}
             VCS_REF=${{ github.sha }}
+            BUILD_DATE=${{ needs.version.outputs.build_date }}
+            SOURCE_URL=${{ github.server_url }}/${{ github.repository }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Smoke test container
-        run: bash scripts/smoke_test.sh visor-atc:ci "${{ needs.version.outputs.version }}"
+        run: bash scripts/smoke_test.sh visor-atc:ci "${{ needs.version.outputs.version }}" "${{ github.sha }}"
 
   publish:
     name: Publish release
@@ -181,6 +185,8 @@ jobs:
           build-args: |
             VISOR_VERSION=${{ env.VERSION }}
             VCS_REF=${{ github.sha }}
+            BUILD_DATE=${{ needs.version.outputs.build_date }}
+            SOURCE_URL=${{ github.server_url }}/${{ github.repository }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

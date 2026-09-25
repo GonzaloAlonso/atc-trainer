@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Example external decision-making agent for Visor ATC (standard library only).
 
-It takes a sector, switches the simulator to lockstep (the simulation only advances when the
-agent asks), and then loops:  observe -> answer open decision points -> step.
+It signs in (use a dedicated controller account, e.g. "agent"), takes a sector, switches the
+simulator to lockstep (the simulation only advances when the agent asks), and then loops:
+observe -> answer open decision points -> step.
 
-    python examples/agent_client.py --sector ALPS-UPPER --steps 120 --dt 5
+    VISOR_USER=agent VISOR_PASSWORD=... python examples/agent_client.py --sector ALPS-UPPER --steps 120
 
 Replace `choose()` with a call to your decision model (e.g. Jev): each decision point already
 carries the situation `state` and typed `questions`; the "action" question lists the candidate
@@ -13,15 +14,20 @@ clearances with the predicted outcome of each one.
 
 import argparse
 import json
+import os
+import urllib.error
 import urllib.request
 
 BASE = "http://127.0.0.1:8000"
+TOKEN = None
 
 
 def call(path, body=None):
     data = None if body is None else json.dumps(body).encode()
     req = urllib.request.Request(BASE + path, data=data, method="POST" if body is not None else "GET")
     req.add_header("Content-Type", "application/json")
+    if TOKEN:
+        req.add_header("Authorization", "Bearer " + TOKEN)
     with urllib.request.urlopen(req, timeout=60) as resp:
         return json.load(resp)
 
@@ -38,15 +44,20 @@ def choose(decision):
 
 
 def main():
-    global BASE
+    global BASE, TOKEN
     ap = argparse.ArgumentParser()
     ap.add_argument("--url", default=BASE)
+    ap.add_argument("--user", default=os.environ.get("VISOR_USER"))
+    ap.add_argument("--password", default=os.environ.get("VISOR_PASSWORD"))
     ap.add_argument("--sector", default="MUAC-DECO")
     ap.add_argument("--steps", type=int, default=60)
     ap.add_argument("--dt", type=float, default=5.0, help="simulated seconds per step")
     ap.add_argument("--name", default="example")
     args = ap.parse_args()
     BASE = args.url.rstrip("/")
+    if not (args.user and args.password):
+        ap.error("credentials required: --user/--password or VISOR_USER/VISOR_PASSWORD")
+    TOKEN = call("/api/auth/login", {"username": args.user, "password": args.password})["token"]
 
     call("/api/sector", {"sector": args.sector})
     call("/api/ai", {"mode": "off"})                       # we are the AI now

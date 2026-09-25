@@ -1,3 +1,4 @@
+import { REVISION } from 'three';
 import { api } from './net.js';
 import { F } from './traffic.js';
 
@@ -22,6 +23,84 @@ export class UI {
     this.bindTabs();
     this.bindStrip();
     this.bindCommand();
+    this.bindUser();
+  }
+
+  // ------------------------------------------------------------------ account
+  async bindUser() {
+    const pop = $('user-pop');
+    $('user-btn').onclick = (e) => { e.stopPropagation(); pop.classList.toggle('hidden'); };
+    document.addEventListener('click', (e) => { if (!pop.contains(e.target)) pop.classList.add('hidden'); });
+    $('menu-logout').onclick = async () => {
+      try { await api('/api/auth/logout', {}); } finally { location.href = '/login'; }
+    };
+    const dlg = $('pw-dialog');
+    $('menu-password').onclick = () => {
+      pop.classList.add('hidden');
+      $('pw-form').reset();
+      $('pw-error').textContent = '';
+      dlg.showModal();
+    };
+    $('pw-cancel').onclick = () => dlg.close();
+    $('menu-about').onclick = () => { pop.classList.add('hidden'); this.showAbout(); };
+    $('version-link').onclick = () => this.showAbout();
+    $('about-close').onclick = () => $('about-dialog').close();
+    $('pw-form').onsubmit = async (e) => {
+      e.preventDefault();
+      if ($('pw-new').value !== $('pw-new2').value) { $('pw-error').textContent = 'The new passwords do not match.'; return; }
+      try {
+        await api('/api/auth/password', { current_password: $('pw-current').value, new_password: $('pw-new').value });
+        dlg.close();
+        this.toast('Password changed');
+      } catch (err) {
+        $('pw-error').textContent = err.message;
+      }
+    };
+    try {
+      this.me = await api('/api/auth/me');
+      $('user-name').textContent = this.me.username;
+      $('user-role').textContent = `Signed in as ${this.me.username} · ${this.me.role}`;
+      $('menu-admin').classList.toggle('hidden', this.me.role !== 'admin');
+    } catch { /* redirected to login */ }
+  }
+
+  async showAbout() {
+    const a = await this.call('/api/about');
+    if (!a) return;
+    const kv = (rows) => rows.filter(([, v]) => v != null && v !== '')
+      .map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join('');
+    const b = a.build;
+    const commit = b.commit
+      ? (b.commit_url ? `<a href="${esc(b.commit_url)}" target="_blank" rel="noopener">${esc(b.commit_short)}</a>` : esc(b.commit_short))
+        + (b.modified ? ' <span class="pill warn">uncommitted changes</span>' : '')
+      : 'unknown';
+    $('about-desc').textContent = a.description;
+    $('about-build').innerHTML = kv([
+      ['Version', `<b>${esc(a.version)}</b> <span class="pill ${b.type === 'release' ? '' : 'warn'}">${esc(b.type)}</span>`],
+      ['Commit', commit],
+      ['Built', b.date ? esc(new Date(b.date).toUTCString()) : 'not a packaged build'],
+      ['Source', b.source ? `<a href="${esc(b.source)}" target="_blank" rel="noopener">${esc(b.source.replace(/^https?:\/\//, ''))}</a>` : null],
+    ]);
+    const deps = Object.entries(a.runtime.dependencies).filter(([, v]) => v).map(([k, v]) => `${k} ${v}`).join(' · ');
+    $('about-runtime').innerHTML = kv([
+      ['Server', `${esc(a.runtime.implementation)} ${esc(a.runtime.python)} · ${esc(a.runtime.platform)}`],
+      ['Libraries', esc(deps)],
+      ['Client', `three.js r${esc(REVISION)}`],
+      ['Up since', esc(new Date(a.runtime.started_at * 1000).toUTCString())],
+    ]);
+    $('about-copyright').textContent = a.copyright;
+    $('about-credits').textContent = a.credits;
+    $('about-third').innerHTML = a.third_party
+      .map((t) => `<li><a href="${esc(t.url)}" target="_blank" rel="noopener">${esc(t.name)}</a> — ${esc(t.use)}</li>`).join('');
+    $('about-dialog').showModal();
+  }
+
+  /** "human:alice" -> "alice" (or "YOU"), "ai:rules" -> "AI" */
+  who(issuer, mine = 'YOU') {
+    if (!issuer) return '';
+    if (issuer.startsWith('ai:')) return 'AI';
+    const name = issuer.startsWith('human:') ? issuer.slice(6) : issuer;
+    return this.me && name === this.me.username ? mine : name;
   }
 
   toast(msg, err = false) {
@@ -106,7 +185,8 @@ export class UI {
 
     const next = Math.max(0, rec.next_poll - st.now);
     const span = cov.first ? `${cov.snapshots} snapshots ${hhmmss(cov.first)}–${hhmmss(cov.last)} UTC` : 'no data yet';
-    $('rec-status').textContent = `Visor ${st.version} · ${st.recording ? '●' : '○ not'} recording OpenSky (${rec.authenticated ? 'authenticated' : 'anonymous'}, every ${Math.round(rec.interval_s)} s) · ${span} · next poll in ${Math.floor(next / 60)}:${String(Math.floor(next % 60)).padStart(2, '0')}${rec.credits_left != null ? ` · ${rec.credits_left} credits left` : ''}${rec.last_error ? ' · ⚠ ' + rec.last_error : ''}`;
+    $('version-link').textContent = `Visor ${st.version}`;
+    $('rec-status').textContent = `· ${st.recording ? '●' : '○ not'} recording OpenSky (${rec.authenticated ? 'authenticated' : 'anonymous'}, every ${Math.round(rec.interval_s)} s) · ${span} · next poll in ${Math.floor(next / 60)}:${String(Math.floor(next % 60)).padStart(2, '0')}${rec.credits_left != null ? ` · ${rec.credits_left} credits left` : ''}${rec.last_error ? ' · ⚠ ' + rec.last_error : ''}`;
   }
 
   // ------------------------------------------------------------------ frames
@@ -216,7 +296,7 @@ export class UI {
       }).join('');
       const aiLine = d.status === 'open' && d.suggestion ? `<div class="ai-line"><span>AI (${esc(d.suggestion.agent)}): ${esc(q.options.find((o) => o.id === sug)?.label ?? sug)} · ${Math.round((d.suggestion.confidence ?? 0) * 100)}%</span>
           <button class="mini ai" data-dec="${d.id}" data-opt="${sug}" data-by="ai:${esc(d.suggestion.agent)}">Accept</button></div>` : '';
-      const done = d.status !== 'open' ? `<div class="meta">${d.status}${d.answered_by ? ' by ' + esc(d.answered_by) : ''}${d.answer?.action ? ' → ' + esc(q.options.find((o) => o.id === d.answer.action)?.label ?? '') : ''}</div>` : '';
+      const done = d.status !== 'open' ? `<div class="meta">${d.status}${d.answered_by ? ' by ' + esc(this.who(d.answered_by, 'you')) : ''}${d.answer?.action ? ' → ' + esc(q.options.find((o) => o.id === d.answer.action)?.label ?? '') : ''}</div>` : '';
       return `<div class="card ${d.kind === 'conflict' ? 'stca' : 'req'}" style="${d.status !== 'open' ? 'opacity:.55' : ''}">
         <div class="card-head"><span class="k" style="color:${color}">${kindLabel}</span><span class="status-pill">${d.id} · ${d.status}</span></div>
         <div class="prompt">${esc(q.prompt)}</div>${optHtml}${aiLine}${done}
@@ -263,7 +343,7 @@ export class UI {
       for (const e of evs) {
         this.eventSeq = Math.max(this.eventSeq, e.seq);
         const div = document.createElement('div');
-        const who = e.speaker === 'ATC' ? (e.issuer?.startsWith('ai:') ? 'ATC·AI' : 'ATC') : e.speaker === 'PILOT' ? (e.callsign ?? 'PILOT') : e.speaker;
+        const who = e.speaker === 'ATC' ? `ATC·${this.who(e.issuer, 'you')}` : e.speaker === 'PILOT' ? (e.callsign ?? 'PILOT') : e.speaker;
         div.className = `msg ${e.speaker} ${e.issuer?.startsWith('ai:') ? 'ai' : ''} ${e.level ?? ''}`;
         div.innerHTML = `<span class="t">${hhmmss(e.t)}</span><span class="who">${esc(who)}</span><span class="txt">${esc(e.text)}</span>`;
         box.appendChild(div);
@@ -323,7 +403,8 @@ export class UI {
     $('s-vs').textContent = (rec.vs > 0 ? '+' : '') + rec.vs;
     $('s-ias').textContent = d && d.icao24 === rec.id ? d.ias_kt : '—';
     $('s-lat').textContent = `NAV ${rec.lateral}${rec.spd ? ' · S' + rec.spd : ''}`;
-    const ctl = rec.flags & F.HUMAN ? 'YOU' : rec.flags & F.AI ? 'AI' : rec.flags & F.SECTOR ? 'IN SECTOR' : 'UNCONTROLLED';
+    const ctlName = d && d.icao24 === rec.id && d.controller ? this.who(d.controller).toUpperCase() : null;
+    const ctl = ctlName ?? (rec.flags & F.HUMAN ? 'CONTROLLED' : rec.flags & F.AI ? 'AI' : rec.flags & F.SECTOR ? 'IN SECTOR' : 'UNCONTROLLED');
     $('s-ctl').textContent = ctl;
     $('s-ctl').style.color = rec.flags & F.HUMAN ? 'var(--human)' : rec.flags & F.AI ? 'var(--ai)' : 'var(--muted)';
     $('s-pending').textContent = d && d.icao24 === rec.id && d.pending.length

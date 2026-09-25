@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Visor ATC · Users</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+  <link rel="stylesheet" href="css/pages.css" />
+</head>
+<body class="page">
+  <header id="top" class="page-top">
+    <div class="brand"><span class="logo"></span>VISOR<span class="sub">ATC</span></div>
+    <a href="/" class="nav-link">← Working position</a>
+    <div class="spacer"></div>
+    <span id="me" class="dim"></span>
+    <button id="logout" class="ghost-btn">Sign out</button>
+  </header>
+
+  <main class="admin">
+    <section class="card-lg">
+      <div class="section-head">
+        <h1>Users</h1>
+        <span id="count" class="dim"></span>
+      </div>
+      <div class="table-wrap">
+        <table class="users">
+          <thead>
+            <tr><th>Username</th><th>Role</th><th>Status</th><th>Last sign-in</th><th>Created</th><th></th></tr>
+          </thead>
+          <tbody id="users"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card-lg">
+      <h2>Add user</h2>
+      <form id="add-form" class="row-form" autocomplete="off">
+        <label>Username <input id="add-username" required minlength="3" maxlength="32" pattern="[A-Za-z0-9_.\-]{3,32}" /></label>
+        <label>Initial password <input id="add-password" type="password" required minlength="10" autocomplete="new-password" /></label>
+        <label>Role
+          <select id="add-role"><option value="controller">Controller</option><option value="admin">Admin</option></select>
+        </label>
+        <label class="check"><input id="add-must-change" type="checkbox" checked /> Must change at first sign-in</label>
+        <button class="primary" type="submit">Add user</button>
+      </form>
+      <p class="hint">Controllers can use the working position and the AI controls. Admins can also manage users.</p>
+    </section>
+  </main>
+  <footer class="page-footer">© 2026 Gonzalo Alonso. All rights reserved.</footer>
+
+  <dialog id="pw-dialog" class="dialog">
+    <form method="dialog" id="pw-form" class="stack">
+      <h2>Reset password for <span id="pw-user"></span></h2>
+      <label>New password <input id="pw-new" type="password" minlength="10" required autocomplete="new-password" /></label>
+      <label class="check"><input id="pw-must-change" type="checkbox" checked /> Must change at next sign-in</label>
+      <p class="hint">The user is signed out everywhere.</p>
+      <p id="pw-error" class="form-error"></p>
+      <div class="dialog-actions">
+        <button type="button" id="pw-cancel" class="ghost-btn">Cancel</button>
+        <button type="submit" class="primary">Set password</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="hidden"></div>
+  <script type="module" src="js/admin.js"></script>
+</body>
+</html>
