@@ -82,6 +82,8 @@ const app = {
   route: null,
   select(id, fly = false) {
     const changed = id !== app.selectedId;
+    // on phones the lists sheet and the flight strip share the screen: show the strip
+    if (id && window.matchMedia('(max-width: 900px)').matches) ui.setLists(false);
     app.selectedId = id;
     if (!id) { app.route = null; ui.detail = null; ui.showStrip(null); return; }
     const rec = store.map.get(id);
@@ -116,7 +118,9 @@ const app = {
     tiles.setStyle(key);
     env.setTheme(key);
     for (const b of document.getElementById('style-seg').children) b.classList.toggle('on', b.dataset.style === key);
-    document.getElementById('attribution').textContent = `${STYLES[key].attribution} · Terrain: Mapzen/AWS · Data: The OpenSky Network · Navdata: OurAirports`;
+    const attr = document.getElementById('attribution');
+    attr.querySelector('.attr-long').textContent = `${STYLES[key].attribution} · Terrain: Mapzen/AWS · Data: The OpenSky Network · Navdata: OurAirports`;
+    attr.querySelector('.attr-short').textContent = `© Esri${key === 'satellite' ? ', Maxar' : ', OSM'} · AWS · OpenSky · OurAirports`;
     try { localStorage.setItem('visor.style', key); } catch { /* ignore */ }
   },
 };

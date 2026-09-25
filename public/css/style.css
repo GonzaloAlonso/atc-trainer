@@ -54,7 +54,6 @@ b { font-weight: 600; }
   background: rgba(77, 255, 154, 0.12); color: var(--human); border: 1px solid rgba(77,255,154,0.35);
 }
 .badge.replay { background: rgba(92, 200, 255, 0.12); color: var(--accent); border-color: rgba(92,200,255,0.35); }
-.transport { display: flex; gap: 6px; align-items: center; }
 .seg { flex: none; display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
 .seg button { background: transparent; border: 0; padding: 5px 9px; cursor: pointer; color: var(--muted); font-family: var(--mono); font-size: 12px; }
 .seg button + button { border-left: 1px solid var(--border); }
@@ -215,7 +214,7 @@ table.traffic tr:hover td { background: rgba(92,200,255,0.08); }
   body:not(.page) #top .brand .sub { display: none; }
 }
 /* Top bar gives way progressively so the account menu always stays on screen. */
-#top > * { flex-shrink: 0; }
+#top > *, .top-extra > * { flex-shrink: 0; }
 #top .field { flex-shrink: 1; min-width: 0; }
 #top .field select { min-width: 72px; }
 @media (max-width: 1600px) {
@@ -233,12 +232,74 @@ table.traffic tr:hover td { background: rgba(92,200,255,0.08); }
 @media (max-width: 1300px) {
   .score span:not(.pts) { display: none; }
 }
+/* ------------------------------------------------------------ tablets & phones */
+.top-extra { display: contents; }            /* desktop: plain top-bar items */
+.compact-only, .lists-only { display: none !important; }
+.lists-btn { position: relative; width: auto; padding: 0 9px; gap: 5px; display: inline-flex; align-items: center; }
+.lists-btn b:empty { display: none; }
+.lists-btn b { font-family: var(--mono); font-size: 10.5px; background: var(--panel); border-radius: 8px; padding: 1px 6px; }
+.lists-btn b.hot { background: var(--alert); color: #fff; }
+#statusbar { gap: 16px; white-space: nowrap; }
+#statusbar > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#attribution { flex: none; max-width: 60%; }
+.attr-short { display: none; }
+
+/* Compact header: secondary controls move into a panel behind the ⋯ button. */
 @media (max-width: 1100px) {
+  .compact-only { display: inline-flex !important; }
+  .spacer.compact-only { display: block !important; }
+  #btn-more { align-items: center; justify-content: center; }
+  #btn-more svg { fill: currentColor; }
+  .top-extra {
+    display: none; position: fixed; top: 54px; right: 8px; z-index: 7;
+    width: min(360px, calc(100vw - 16px)); max-height: calc(100dvh - 90px); overflow-y: auto;
+    flex-direction: column; align-items: stretch; gap: 12px; padding: 14px;
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px;
+    box-shadow: 0 16px 40px rgba(0,0,0,0.5); white-space: normal;
+  }
+  .top-extra.open { display: flex; }
+  .top-extra .spacer { display: none; }
+  #top .top-extra .field { font-size: 11.5px; flex-direction: column; align-items: stretch; gap: 5px; flex-shrink: 0; }
+  #top .top-extra select { max-width: none; width: 100%; min-height: 36px; font-size: 14px; }
+  .top-extra .seg { align-self: stretch; }
+  .top-extra .seg button { flex: 1; padding: 8px 6px; }
+  .top-extra .score { flex-wrap: wrap; gap: 6px 12px; order: -1; font-size: 12px; }
+  .top-extra .score span { display: inline !important; }
+  .top-extra #btn-settings { width: auto; height: 36px; align-self: stretch; }
+  .top-extra #btn-settings::after { content: " Display settings"; font-size: 13px; }
+  #user-name { display: none; }
   #bottom { left: 12px; height: 140px; }
   #left { bottom: 180px; width: 270px; }
 }
-@media (max-width: 720px) {
-  #top { overflow-x: auto; }
-  #left { display: none; }
-  #right { left: 12px; width: auto; max-height: 45vh; }
+
+/* Phones & portrait tablets: the lists become a sheet opened from the header. */
+@media (max-width: 900px) {
+  .lists-only { display: inline-flex !important; }
+  #left {
+    display: none; top: 56px; left: 8px; right: 8px; width: auto; bottom: 186px; z-index: 6;
+  }
+  body.lists-open #left { display: flex; }
+  #right { top: 56px; left: 8px; right: 8px; width: auto; max-height: calc(100dvh - 250px); }
+  #bottom { left: 8px; right: 8px; bottom: 28px; height: 150px; }
+  #statusbar { padding: 0 10px; }
+  #attribution { max-width: none; }                  /* credits win; recorder status truncates */
+  .attr-long { display: none; }
+  .attr-short { display: inline; }
+}
+
+@media (max-width: 600px) {
+  #top { gap: 8px; padding: 0 8px; }
+  #clock { font-size: 14px; }
+  .badge { padding: 2px 6px; font-size: 10px; }
+  #bottom { height: 132px; }
+  #left { bottom: 168px; }
+  #right { max-height: calc(100dvh - 232px); }
+  #radio { font-size: 11px; padding: 6px 10px; }
+  .msg { gap: 6px; }
+  .msg .t { display: none; }
+  /* 16 px text stops iOS Safari from zooming in when an input gets focus */
+  #cmd, .ctl-row input, .dialog input, .pop select, .top-extra select { font-size: 16px; }
+  .ctl-row label { width: 44px; }
+  .pop { left: 8px; right: 8px; width: auto; }
+  .hint kbd { display: none; }
 }

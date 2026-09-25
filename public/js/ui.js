@@ -118,6 +118,18 @@ export class UI {
   // ------------------------------------------------------------------ top bar
   bindTop() {
     $('btn-pause').onclick = () => this.togglePause();
+    // compact header: secondary controls live in a panel behind the ⋯ button
+    const extra = $('top-extra');
+    const setMore = (open) => {
+      extra.classList.toggle('open', open);
+      $('btn-more').setAttribute('aria-expanded', String(open));
+    };
+    $('btn-more').onclick = (e) => { e.stopPropagation(); setMore(!extra.classList.contains('open')); };
+    document.addEventListener('click', (e) => {
+      if (extra.classList.contains('open') && !extra.contains(e.target) && e.target !== $('btn-more')) setMore(false);
+    });
+    $('btn-lists').onclick = () => this.setLists(!document.body.classList.contains('lists-open'));
+    this.setMore = setMore;
     $('speed-seg').onclick = (e) => {
       const s = e.target.dataset.speed;
       if (s) this.call('/api/sim', { action: 'speed', speed: Number(s) });
@@ -134,8 +146,17 @@ export class UI {
     };
     $('ai-mode').onchange = () => this.setAi();
     $('ai-agent').onchange = () => this.setAi();
-    $('btn-settings').onclick = () => $('settings').classList.toggle('hidden');
+    $('btn-settings').onclick = (e) => {
+      e.stopPropagation();
+      this.setMore(false);
+      $('settings').classList.toggle('hidden');
+    };
     $('style-seg').onclick = (e) => { const s = e.target.dataset.style; if (s) this.app.setStyle(s); };
+  }
+
+  setLists(open) {
+    document.body.classList.toggle('lists-open', open);
+    $('btn-lists').setAttribute('aria-expanded', String(open));
   }
 
   async setAi() {
@@ -247,6 +268,9 @@ export class UI {
     const n = $('n-alerts');
     n.textContent = conf.length + reqs.length;
     n.classList.toggle('hot', conf.some((c) => c[2] === 'LOS'));
+    const lc = $('lists-count');
+    lc.textContent = conf.length + reqs.length || '';
+    lc.classList.toggle('hot', conf.some((c) => c[2] === 'LOS'));
     if (sig === this.sigs.alerts) return;
     this.sigs.alerts = sig;
     const el = $('tab-alerts');

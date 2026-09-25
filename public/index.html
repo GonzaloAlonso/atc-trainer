@@ -3,6 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="author" content="Gonzalo Alonso" />
+  <meta name="copyright" content="© 2026 Gonzalo Alonso. All rights reserved." />
   <title>Visor ATC</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -29,22 +31,27 @@
       <div id="date">UTC</div>
     </div>
     <span id="mode-badge" class="badge">LIVE</span>
-    <div class="transport">
-      <button id="btn-pause" class="icon" title="Pause / resume (Space)">❚❚</button>
+    <button id="btn-pause" class="icon" title="Pause / resume (Space)">❚❚</button>
+    <!-- Desktop: these are ordinary top-bar items (display: contents).
+         Small screens: they move into a panel opened with the ⋯ button. -->
+    <div id="top-extra" class="top-extra">
       <div class="seg" id="speed-seg">
         <button data-speed="1">1×</button><button data-speed="2">2×</button><button data-speed="4">4×</button><button data-speed="8">8×</button><button data-speed="16">16×</button>
       </div>
+      <label class="field">Scenario <select id="scenario"></select></label>
+      <label class="field">Sector <select id="sector"><option value="">All Europe (observe)</option></select></label>
+      <label class="field">AI
+        <select id="ai-mode"><option value="off">Off</option><option value="advisory">Advisory</option><option value="autonomous">Autonomous</option></select>
+        <select id="ai-agent"></select>
+      </label>
+      <div class="spacer"></div>
+      <div id="score" class="score"></div>
+      <div class="seg" id="style-seg"><button data-style="radar">Radar</button><button data-style="satellite">Satellite</button></div>
+      <button id="btn-settings" class="icon" title="Display settings">⚙</button>
     </div>
-    <label class="field">Scenario <select id="scenario"></select></label>
-    <label class="field">Sector <select id="sector"><option value="">All Europe (observe)</option></select></label>
-    <label class="field">AI
-      <select id="ai-mode"><option value="off">Off</option><option value="advisory">Advisory</option><option value="autonomous">Autonomous</option></select>
-      <select id="ai-agent"></select>
-    </label>
-    <div class="spacer"></div>
-    <div id="score" class="score"></div>
-    <div class="seg" id="style-seg"><button data-style="radar">Radar</button><button data-style="satellite">Satellite</button></div>
-    <button id="btn-settings" class="icon" title="Display settings">⚙</button>
+    <div class="spacer compact-only"></div>
+    <button id="btn-lists" class="icon lists-btn lists-only" title="Alerts, decisions &amp; traffic" aria-expanded="false">☰<b id="lists-count"></b></button>
+    <button id="btn-more" class="icon compact-only" title="Controls" aria-expanded="false" aria-controls="top-extra"><svg width="16" height="4" viewBox="0 0 16 4" aria-hidden="true"><circle cx="2" cy="2" r="1.6"/><circle cx="8" cy="2" r="1.6"/><circle cx="14" cy="2" r="1.6"/></svg></button>
     <div class="user-menu">
       <button id="user-btn" class="user-btn" title="Account"><span class="dot"></span><span id="user-name">…</span> ▾</button>
       <div id="user-pop" class="menu hidden">
@@ -144,7 +151,7 @@
     </form>
   </footer>
 
-  <div id="statusbar"><span><button id="version-link" class="linkish" title="About Visor ATC"></button> <span id="rec-status"></span></span><span id="attribution"></span></div>
+  <div id="statusbar"><span><button id="version-link" class="linkish" title="About Visor ATC"></button> <span id="rec-status"></span></span><span id="attribution"><span class="attr-long"></span><span class="attr-short"></span></span></div>
   <div id="toast" class="hidden"></div>
 
   <dialog id="about-dialog" class="dialog about">
