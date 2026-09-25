@@ -18,6 +18,7 @@ EUROPE = {
 }
 
 # --- OpenSky -------------------------------------------------------------------------------
+RECORD = os.environ.get("VISOR_RECORD", "1") != "0"   # 0 = don't poll OpenSky (tests, CI)
 OPENSKY_CLIENT_ID = os.environ.get("OPENSKY_CLIENT_ID")
 OPENSKY_CLIENT_SECRET = os.environ.get("OPENSKY_CLIENT_SECRET")
 OPENSKY_AUTHENTICATED = bool(OPENSKY_CLIENT_ID and OPENSKY_CLIENT_SECRET)

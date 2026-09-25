@@ -5,6 +5,7 @@ Interactive documentation (OpenAPI) is served at /docs.
 
 import asyncio
 import logging
+from contextlib import asynccontextmanager
 import time
 from typing import Any, Dict, List, Literal, Optional
 
@@ -13,7 +14,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import config, sectors
+from . import __version__, config, sectors
 from .clearances import KINDS, Clearance
 from .engine import Engine
 from .navdata import NavData
@@ -71,21 +72,22 @@ def create_app():
     navdata = NavData()
     recorder = Recorder(store)
     engine = Engine(store, navdata)
-    app = FastAPI(title="Visor ATC", version="0.2",
-                  description="Air traffic control simulator on recorded OpenSky data.")
-    app.state.engine = engine
     sockets = set()
 
-    @app.on_event("startup")
-    async def _startup():
-        recorder.start()
+    @asynccontextmanager
+    async def lifespan(_app):
+        if config.RECORD:
+            recorder.start()
         engine.start()
-        asyncio.get_event_loop().create_task(_broadcast())
-
-    @app.on_event("shutdown")
-    async def _shutdown():
+        task = asyncio.get_event_loop().create_task(_broadcast())
+        yield
+        task.cancel()
         engine.stop()
         recorder.stop()
+
+    app = FastAPI(title="Visor ATC", version=__version__, lifespan=lifespan,
+                  description="Air traffic control simulator on recorded OpenSky data.")
+    app.state.engine = engine
 
     async def _broadcast():
         last = None
@@ -119,7 +121,8 @@ def create_app():
     # ------------------------------------------------------------------ status & static data
     @app.get("/api/status", tags=["info"])
     def status():
-        return {"recorder": recorder.status(), "ai": engine.ai_status(),
+        return {"version": __version__, "recording": config.RECORD,
+                "recorder": recorder.status(), "ai": engine.ai_status(),
                 "sim": {"t": engine.t, "mode": engine.mode, "speed": engine.speed,
                         "paused": engine.paused, "lockstep": engine.lockstep,
                         "aircraft": len(engine.aircraft)},

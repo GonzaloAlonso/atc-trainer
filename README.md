@@ -32,6 +32,8 @@ docker compose logs -f
 - Run **one** container. The simulation state is held in memory, so do not scale the service.
 - The container listens on `127.0.0.1:8000` of the host. Publish it through a reverse proxy on its own (sub)domain; the UI uses absolute `/api` and `/ws` paths, so a sub-path such as `/visor/` won't work.
 
+To run a published release instead of building on the server, set `VISOR_IMAGE=ghcr.io/<owner>/<repo>:<version>` in `.env`, then run `docker compose pull && docker compose up -d`.
+
 **The app has no login.** Anyone who can reach it can issue clearances, reset the scenario or switch the AI on. Put authentication in front of it at the proxy. Example nginx site (TLS via certbot or similar):
 
 ```nginx
@@ -55,6 +57,27 @@ server {
 ```
 
 With Caddy, `atc.example.com { basicauth { you <hash> }  reverse_proxy 127.0.0.1:8000 }` does the same, including TLS and WebSockets. Generate the hash with `caddy hash-password`.
+
+## Versioning, CI and releases
+
+`VERSION` holds `MAJOR.MINOR`. [.github/workflows/release.yml](.github/workflows/release.yml) runs on every push and pull request:
+
+1. **Version**: the next patch number after the highest existing `vMAJOR.MINOR.*` tag. For example, with `VERSION` = `1.0` and tags up to `v1.0.4`, the next version is `1.0.5`. Pull requests get `1.0.5-dev.<sha>`.
+2. **Test**: pytest (flight model, parser, conflict detection, engine plus rule agent, API), byte-compilation, a syntax check of the frontend modules, and shellcheck.
+3. **Build and verify**: builds the image with the version baked in, starts it, and runs [scripts/smoke_test.sh](scripts/smoke_test.sh). The smoke test checks health, the reported version and label, UI, docs, navdata, the API contract, and that the container runs as non-root.
+4. **Publish** (default branch only, after all checks pass):
+   - pushes `ghcr.io/<owner>/<repo>:X.Y.Z`, `:X.Y` and `:latest` for amd64 and arm64
+   - creates the annotated tag `vX.Y.Z` on the commit
+   - creates a GitHub Release `vX.Y.Z` with generated notes
+
+The running app reports its version at `/api/status`, in `/docs`, and in the UI status bar. To start a new minor or major line, edit `VERSION` (e.g. `1.1`); the patch number restarts at 0.
+
+Local checks:
+
+```sh
+.venv/bin/pip install -r requirements-dev.txt && .venv/bin/python -m pytest -q tests
+docker build --build-arg VISOR_VERSION=1.0.0-local -t visor-atc:test . && scripts/smoke_test.sh visor-atc:test 1.0.0-local
+```
 
 ## Playing
 

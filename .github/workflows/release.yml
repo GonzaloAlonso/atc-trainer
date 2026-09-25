@@ -1,0 +1,217 @@
+# Build, test, verify and release Visor ATC.
+#
+# Versioning: VERSION holds MAJOR.MINOR (e.g. "1.0"). Every successful build of the default branch
+# is released as MAJOR.MINOR.PATCH, where PATCH is one more than the highest existing
+# vMAJOR.MINOR.* tag. The same number is used for the git tag (vX.Y.Z), the GitHub Release, the
+# Docker image tag (X.Y.Z, plus X.Y and latest) and the version the app reports at /api/status.
+# Bump MAJOR or MINOR by editing VERSION; PATCH starts again at 0.
+#
+# Pull requests run the same build, tests and container verification but publish nothing.
+
+name: CI / Release
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["**.md", ".env.example"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Releases on main run strictly one after another so two builds can't claim the same version.
+  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && 'release' || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  version:
+    name: Determine version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+      release: ${{ steps.v.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: v
+        name: Compute next version
+        run: |
+          set -euo pipefail
+          base=$(tr -d ' \r\n' < VERSION)
+          [[ "$base" =~ ^[0-9]+\.[0-9]+$ ]] || { echo "::error::VERSION must be MAJOR.MINOR, got '$base'"; exit 1; }
+
+          # Re-run of an already released commit: keep its version, don't release again.
+          existing=$(git tag --points-at HEAD --list "v${base}.*" | sort -V | tail -n1)
+          last=$(git tag --list "v${base}.*" | sed "s/^v${base}\.//" | grep -E '^[0-9]+$' | sort -n | tail -n1 || true)
+          next="${base}.$(( ${last:--1} + 1 ))"
+
+          is_main=false
+          if [[ "$GITHUB_REF" == "refs/heads/main" && "$GITHUB_EVENT_NAME" != "pull_request" ]]; then is_main=true; fi
+
+          if [[ -n "$existing" ]]; then
+            version="${existing#v}"; release=false
+            echo "::notice::Commit already released as $existing"
+          elif $is_main; then
+            version="$next"; release=true
+          else
+            version="${next}-dev.$(git rev-parse --short HEAD)"; release=false
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+          echo "### Version \`$version\` (release: $release)" >> "$GITHUB_STEP_SUMMARY"
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements*.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Byte-compile
+        run: python -m compileall -q atc server.py scripts examples
+
+      - name: Unit and API tests
+        run: python -m pytest -q tests
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Check frontend syntax
+        run: |
+          # The browser loads these as ES modules; parse them the same way.
+          echo '{"type":"module"}' > public/js/package.json
+          for f in public/js/*.js; do node --check "$f"; done
+          rm public/js/package.json
+
+      - name: Check shell scripts
+        run: shellcheck scripts/*.sh
+
+  image:
+    name: Build & verify image
+    needs: [version, test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build (linux/amd64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: visor-atc:ci
+          build-args: |
+            VISOR_VERSION=${{ needs.version.outputs.version }}
+            VCS_REF=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test container
+        run: bash scripts/smoke_test.sh visor-atc:ci "${{ needs.version.outputs.version }}"
+
+  publish:
+    name: Publish release
+    needs: [version, image]
+    if: needs.version.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write     # tag + release
+      packages: write     # ghcr.io
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      TAG: ${{ needs.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Image name
+        run: |
+          echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+          echo "MINOR=${VERSION%.*}" >> "$GITHUB_ENV"
+
+      - name: Refuse to overwrite an existing tag
+        run: |
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "::error::Tag $TAG already exists"; exit 1
+          fi
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push (amd64 + arm64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ${{ env.IMAGE }}:${{ env.VERSION }}
+            ${{ env.IMAGE }}:${{ env.MINOR }}
+            ${{ env.IMAGE }}:latest
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          build-args: |
+            VISOR_VERSION=${{ env.VERSION }}
+            VCS_REF=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Tag commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Visor ATC $VERSION" "$GITHUB_SHA"
+          git push origin "refs/tags/$TAG"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cat > notes.md <<EOF
+          Docker image:
+
+          \`\`\`sh
+          docker pull ${IMAGE}:${VERSION}
+          \`\`\`
+
+          Also tagged \`${MINOR}\` and \`latest\`. Platforms: linux/amd64, linux/arm64.
+          Commit: ${GITHUB_SHA}
+          EOF
+          gh release create "$TAG" --verify-tag --title "Visor ATC $VERSION" \
+            --notes-file notes.md --generate-notes
+
+      - name: Summary
+        run: |
+          {
+            echo "### Released $TAG"
+            echo "- Image: \`${IMAGE}:${VERSION}\` (+ \`${MINOR}\`, \`latest\`)"
+            echo "- Release: ${{ github.server_url }}/${{ github.repository }}/releases/tag/${TAG}"
+          } >> "$GITHUB_STEP_SUMMARY"

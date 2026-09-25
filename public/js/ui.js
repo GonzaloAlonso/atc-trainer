@@ -106,7 +106,7 @@ export class UI {
 
     const next = Math.max(0, rec.next_poll - st.now);
     const span = cov.first ? `${cov.snapshots} snapshots ${hhmmss(cov.first)}–${hhmmss(cov.last)} UTC` : 'no data yet';
-    $('rec-status').textContent = `● Recording OpenSky (${rec.authenticated ? 'authenticated' : 'anonymous'}, every ${Math.round(rec.interval_s)} s) · ${span} · next poll in ${Math.floor(next / 60)}:${String(Math.floor(next % 60)).padStart(2, '0')}${rec.credits_left != null ? ` · ${rec.credits_left} credits left` : ''}${rec.last_error ? ' · ⚠ ' + rec.last_error : ''}`;
+    $('rec-status').textContent = `Visor ${st.version} · ${st.recording ? '●' : '○ not'} recording OpenSky (${rec.authenticated ? 'authenticated' : 'anonymous'}, every ${Math.round(rec.interval_s)} s) · ${span} · next poll in ${Math.floor(next / 60)}:${String(Math.floor(next % 60)).padStart(2, '0')}${rec.credits_left != null ? ` · ${rec.credits_left} credits left` : ''}${rec.last_error ? ' · ⚠ ' + rec.last_error : ''}`;
   }
 
   // ------------------------------------------------------------------ frames

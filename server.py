@@ -14,7 +14,7 @@ import os
 
 import uvicorn
 
-from atc import config
+from atc import __version__, config
 from atc.api import create_app
 
 
@@ -25,8 +25,9 @@ def main():
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     logging.getLogger("visor").info(
-        "OpenSky %s, polling every %ds",
-        "authenticated" if config.OPENSKY_AUTHENTICATED else "anonymous", config.POLL_INTERVAL_S)
+        "Visor ATC %s — OpenSky %s, polling every %ds%s", __version__,
+        "authenticated" if config.OPENSKY_AUTHENTICATED else "anonymous", config.POLL_INTERVAL_S,
+        "" if config.RECORD else " (recording disabled)")
     uvicorn.run(create_app(), host=args.host, port=args.port, log_level="warning")
 
 

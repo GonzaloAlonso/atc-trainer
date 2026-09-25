@@ -30,4 +30,13 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/status', timeout=4)"
 
+# Version metadata last, so a new release doesn't invalidate the cached layers above.
+ARG VISOR_VERSION=dev
+ARG VCS_REF=unknown
+LABEL org.opencontainers.image.title="Visor ATC" \
+      org.opencontainers.image.description="3D air traffic control simulator on OpenSky data, with a decision-AI API" \
+      org.opencontainers.image.version="${VISOR_VERSION}" \
+      org.opencontainers.image.revision="${VCS_REF}"
+ENV VISOR_VERSION=${VISOR_VERSION}
+
 CMD ["python", "server.py"]

@@ -1,7 +1,9 @@
 services:
   visor:
     build: .
-    image: visor-atc:latest
+    # Set VISOR_IMAGE (e.g. ghcr.io/<owner>/<repo>:1.0.3) to run a published release instead of
+    # building locally: `docker compose pull && docker compose up -d`.
+    image: ${VISOR_IMAGE:-visor-atc:latest}
     restart: unless-stopped
     # Bound to localhost: put a reverse proxy (nginx, Caddy, ...) with TLS and authentication in
     # front. Change to "8000:8000" only if the host is not reachable from the internet.
