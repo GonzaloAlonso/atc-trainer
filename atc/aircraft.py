@@ -33,6 +33,8 @@ class FlightPlan:
         self.points = []
         self.times = []
         self.terminated_at = None   # set when the airframe vanished from later snapshots
+        self.spawned = False        # an Aircraft has been created from this plan
+        self.done = False           # stale or finished; revived if new data arrives
 
     def add(self, row):
         t, icao24, callsign, country, lat, lon, alt, gs, trk, vs, category, squawk = row
@@ -45,6 +47,8 @@ class FlightPlan:
         self.points.append((t, lat, lon, alt, gs, trk, vs))
         self.times.append(t)
         self.terminated_at = None
+        if self.done:               # e.g. a recording gap: the flight is back, let it respawn
+            self.done = self.spawned = False
 
     def prune_before(self, t):
         """Forget points older than t (keeps one point before t for interpolation)."""

@@ -50,3 +50,27 @@ def test_conflict_decision_resolved_by_rule_agent(engine):
     advance(engine, 300)
     assert engine.score["los"] == 0
     assert engine.score["decisions_ai"] == 1
+
+
+def test_flight_reappears_after_recording_gap(store):
+    """A recording gap marks plans stale; fresh data for the same airframe must bring it back."""
+    import time
+    from atc.engine import Engine
+    from conftest import FakeNav, fly, state
+
+    t0 = int(time.time()) - 7200
+
+    def snap(t):
+        la, lo = fly(47.0, 7.0, 90, 450, t - t0)
+        store.insert_snapshot({"time": t, "states": [state("aaa001", "TST001", la, lo, 35000, 450, 90, t=t)]})
+
+    for k in range(6):
+        snap(t0 + 60 * k)
+    e = Engine(store, FakeNav())
+    e.reset("replay", t0)
+    advance(e, 900)
+    assert not e.aircraft, "stale flight should have been removed"
+
+    snap(t0 + 1200)                       # recorder is back
+    advance(e, 320)
+    assert "aaa001" in e.aircraft

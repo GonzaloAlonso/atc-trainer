@@ -155,22 +155,25 @@ export class Overlay {
     for (const r of store.list) {
       if (!r.onScreen) continue;
       const important = r.flags & (F.SECTOR | F.HUMAN | F.AI | F.LOS | F.STCA | F.REQUEST);
-      if (r.id === selectedId || r.id === hoverId || important || zoomedIn || this.options.labelsAll) {
-        const pr = r.id === selectedId ? 0 : r.id === hoverId ? 1 : (r.flags & (F.LOS | F.STCA)) ? 2
-          : (r.flags & (F.HUMAN | F.AI | F.REQUEST)) ? 3 : (r.flags & F.SECTOR) ? 4 : 5;
-        // in tilted views, don't pile labels of far-away traffic up on the horizon
-        if (pr >= 3 && camera.position.distanceTo(r.world) > distance * 2.2) continue;
-        cand.push([pr, r]);
-      }
+      const wanted = r.id === selectedId || important || zoomedIn || this.options.labelsAll;
+      if (!wanted && r.id !== hoverId) continue;
+      // Hovering only adds a label; it never reorders others (that would move the label away
+      // from the pointer, end the hover and snap everything back: a flicker loop).
+      const pr = r.id === selectedId ? 0 : (r.flags & (F.LOS | F.STCA)) ? 1
+        : (r.flags & (F.HUMAN | F.AI | F.REQUEST)) ? 2 : (r.flags & F.SECTOR) ? 3 : wanted ? 4 : 5;
+      // in tilted views, don't pile labels of far-away traffic up on the horizon
+      if (pr >= 2 && camera.position.distanceTo(r.world) > distance * 2.2) continue;
+      cand.push([pr, r]);
     }
-    cand.sort((a, b) => a[0] - b[0]);
+    // stable order: priority, then id (ties must not reshuffle from frame to frame)
+    cand.sort((a, b) => a[0] - b[0] || (a[1].id < b[1].id ? -1 : a[1].id > b[1].id ? 1 : 0));
     ctx.font = FONT;
     const n = Math.min(cand.length, MAX_LABELS);
     const placed = [];
+    const drawn = [];
     for (let i = 0; i < n; i++) {
-      const r = cand[i][1];
-      const color = PALETTE[r.colorKey] ?? PALETTE.other;
-      const dim = cand[i][0] === 5;
+      const [pr, r] = cand[i];
+      const dim = pr >= 4 && r.id !== hoverId;
       const fl = String(Math.round(r.pAlt / 100)).padStart(3, '0');
       const trend = r.vs > 250 ? '↑' : r.vs < -250 ? '↓' : ' ';
       const l1 = r.cs + (r.cls === 'H' ? ' H' : '');
@@ -178,28 +181,49 @@ export class Overlay {
       const lat = r.lateral !== 'ROUTE' ? ' ' + r.lateral : '';
       const l3 = `${String(r.gs).padStart(3, ' ')}${lat}${r.spd ? ' S' + r.spd : ''}`;
       const lines = dim ? [l1, l2] : [l1, l2, l3];
-      const tw = Math.max(...lines.map((l) => ctx.measureText(l).width));
+      // quantised width: a changing digit or trend arrow must not change the box size
+      const tw = Math.ceil(Math.max(...lines.map((l) => ctx.measureText(l).width)) / 14) * 14;
       const bw = tw + 6, bh = lines.length * LINE_H + 4;
-      // de-clutter: keep the previous corner unless it now overlaps, else try the others
-      let slot = r.labelSlot ?? 0;
-      for (let k = 0; k < 4; k++) {
-        const c = (slot + k) % 4;
-        const [px, py] = this.slotPos(r, c, bw, bh);
-        if (k === 3 || !placed.some((q) => px < q.x + q.w && px + bw > q.x && py < q.y + q.h && py + bh > q.y)) { slot = c; break; }
-      }
-      r.labelSlot = slot;
-      const [px, py] = this.slotPos(r, slot, bw, bh);
-      const bx = px + 3, by = py + 2;
-      placed.push({ x: px, y: py, w: bw, h: bh });
-      const flash = (r.flags & (F.LOS | F.REQUEST)) && !blink;
 
+      const { slot, overlap } = this.chooseSlot(r, bw, bh, placed, time);
+      // Background labels that can't be placed cleanly are decluttered, with hysteresis so
+      // they don't blink in and out. Selected/conflict/controlled/request labels always show.
+      if (pr >= 3 && r.id !== hoverId) {
+        const crowded = overlap > 0.3 * bw * bh;
+        const clear = overlap < 0.1 * bw * bh;
+        if (r.labelHidden) {
+          r.clearSince = clear ? (r.clearSince ?? time) : null;
+          if (r.clearSince == null || time - r.clearSince < 500) continue;
+          r.labelHidden = false;
+        } else {
+          r.crowdedSince = crowded ? (r.crowdedSince ?? time) : null;
+          if (r.crowdedSince != null && time - r.crowdedSince > 500) {
+            r.labelHidden = true;
+            r.clearSince = null;
+            continue;
+          }
+        }
+      } else {
+        r.labelHidden = false;
+      }
+      const [px, py] = this.slotPos(r, slot, bw, bh);
+      placed.push({ x: px, y: py, w: bw, h: bh });
+      drawn.push({ r, pr, lines, tw, slot, px, py, dim });
+    }
+
+    // hovered label last so it sits on top
+    drawn.sort((a, b) => (a.r.id === hoverId) - (b.r.id === hoverId));
+    for (const { r, lines, tw, slot, px, py, dim } of drawn) {
+      const color = PALETTE[r.colorKey] ?? PALETTE.other;
+      const bx = px + 3, by = py + 2;
+      const flash = (r.flags & (F.LOS | F.REQUEST)) && !blink;
       ctx.globalAlpha = dim ? 0.55 : 1;
       ctx.strokeStyle = color;
       ctx.lineWidth = 1;
       const ax = slot === 0 || slot === 3 ? bx - 3 : bx + tw + 3;
       const ay = slot < 2 ? by + lines.length * LINE_H + 2 : by - 2;
       ctx.beginPath(); ctx.moveTo(r.sx, r.sy); ctx.lineTo(ax, ay); ctx.stroke();
-      ctx.fillStyle = 'rgba(6,10,18,0.62)';
+      ctx.fillStyle = r.id === hoverId ? 'rgba(10,18,32,0.92)' : 'rgba(6,10,18,0.62)';
       ctx.fillRect(bx - 3, by - 2, tw + 6, lines.length * LINE_H + 4);
       if (r.id === selectedId) { ctx.strokeStyle = PALETTE.selected; ctx.strokeRect(bx - 3.5, by - 2.5, tw + 7, lines.length * LINE_H + 5); }
       ctx.fillStyle = flash ? '#ffffff' : color;
@@ -207,6 +231,43 @@ export class Overlay {
       ctx.globalAlpha = 1;
       this.labels.push({ id: r.id, x: bx - 3, y: by - 2, w: tw + 6, h: lines.length * LINE_H + 4 });
     }
+  }
+
+  /**
+   * Pick the corner for a label: the one with the least overlap with labels already placed.
+   * Hysteresis keeps it where it is unless moving clearly helps and it hasn't moved recently,
+   * so dense traffic doesn't make labels hop between corners every frame.
+   */
+  chooseSlot(r, w, h, placed, time) {
+    const overlapAt = (slot) => {
+      const [x, y] = this.slotPos(r, slot, w, h);
+      let a = 0;
+      for (const q of placed) {
+        const ox = Math.min(x + w, q.x + q.w) - Math.max(x, q.x);
+        const oy = Math.min(y + h, q.y + q.h) - Math.max(y, q.y);
+        if (ox > 0 && oy > 0) a += ox * oy;
+      }
+      // keep labels on screen
+      if (x < 0 || y < 48 || x + w > this.w || y + h > this.h) a += w * h * 0.5;
+      return a;
+    };
+    const cur = r.labelSlot ?? 0;
+    const curOverlap = overlapAt(cur);
+    if (curOverlap === 0) return { slot: cur, overlap: 0 };
+    let best = cur, bestOverlap = curOverlap;
+    for (let s = 0; s < 4; s++) {
+      if (s === cur) continue;
+      const o = overlapAt(s);
+      if (o < bestOverlap) { best = s; bestOverlap = o; }
+    }
+    const worthIt = bestOverlap === 0 || bestOverlap < curOverlap - 0.25 * w * h;
+    const settled = time - (r.labelMovedAt ?? -1e9) > 800;
+    if (best !== cur && worthIt && settled) {
+      r.labelSlot = best;
+      r.labelMovedAt = time;
+      return { slot: best, overlap: bestOverlap };
+    }
+    return { slot: cur, overlap: curOverlap };
   }
 
   /** Top-left corner of a label box in one of four slots around the target (0 NE, 1 NW, 2 SW, 3 SE). */

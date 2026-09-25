@@ -77,7 +77,10 @@ class Engine:
             if mode == "live":
                 self.speed = 1.0
             self.aircraft = {}
-            self.loader = PlanLoader(self.store, start_t)
+            # After a recording gap, live mode ignores the old backlog instead of spawning
+            # aircraft from positions that are half an hour old.
+            stale_live = mode == "live" and start_t == now
+            self.loader = PlanLoader(self.store, start_t, backlog_s=120 if stale_live else 3600)
             self.loader.load(start_t + 1800)
             self._next_load = start_t + 20
             self.conflicts = []
@@ -190,7 +193,7 @@ class Engine:
         t = self.t
         interval = self.loader.interval
         for icao, plan in self.loader.plans.items():
-            if getattr(plan, "spawned", False) or getattr(plan, "done", False):
+            if plan.spawned or plan.done:
                 continue
             if not plan.times or plan.times[0] > t or icao in self.aircraft:
                 continue

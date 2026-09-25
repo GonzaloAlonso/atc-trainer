@@ -210,4 +210,4 @@ function frame(now) {
 }
 requestAnimationFrame(frame);
 
-window.visor = { scene, camera, controls, store, tiles, app, worldToLatLon, FT };
+window.visor = { scene, camera, controls, store, tiles, app, overlay, worldToLatLon, toWorld, FT };
