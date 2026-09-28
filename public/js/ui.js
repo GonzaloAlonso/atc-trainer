@@ -211,6 +211,14 @@ export class UI {
   }
 
   setStatus(st) {
+    // The server was upgraded while this page was open: offer a reload instead of running
+    // an old UI against a new API.
+    this.loadedVersion ??= st.version;
+    if (st.version !== this.loadedVersion && !this._upgradeShown) {
+      this._upgradeShown = true;
+      $('upgrade-text').textContent = `ATC Trainer ${st.version} is available (this page runs ${this.loadedVersion}).`;
+      $('upgrade').classList.remove('hidden');
+    }
     const rec = st.recorder;
     const cov = rec.coverage;
     const ai = $('ai-agent');

@@ -160,6 +160,10 @@
 
   <div id="statusbar"><span><button id="version-link" class="linkish" title="About ATC Trainer"></button> <span id="rec-status"></span></span><span id="attribution"><span class="attr-long"></span><span class="attr-short"></span></span></div>
   <div id="toast" class="hidden"></div>
+  <div id="upgrade" class="upgrade hidden" role="alert">
+    <span id="upgrade-text">A new version is available.</span>
+    <button class="primary" onclick="location.reload()">Reload</button>
+  </div>
 
   <!-- Guided tutorial -->
   <section id="tutorial" class="tut hidden" aria-live="polite" aria-labelledby="tut-title">

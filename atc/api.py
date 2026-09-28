@@ -598,6 +598,12 @@ def create_app():
         except ValueError as exc:
             raise HTTPException(400, str(exc))
 
+    @app.post("/api/sector", include_in_schema=False)
+    def legacy_sector():
+        """Removed in 2.0. Pages cached from 1.x still call it: tell them to reload."""
+        raise HTTPException(410, "This page is outdated (ATC Trainer %s is running). "
+                                 "Reload it with Ctrl+Shift+R (Cmd+Shift+R on a Mac)." % __version__)
+
     @app.get("/api/schema", tags=["agent"])
     def schema():
         """Machine-readable description of the action space for agent builders."""

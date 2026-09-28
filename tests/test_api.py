@@ -38,3 +38,9 @@ def test_ui_is_revalidated_after_upgrades(client):
         assert client.get(path).headers.get("cache-control") == "no-cache", path
     assert client.get("/login").headers.get("cache-control") == "no-cache"
     assert "no-cache" not in (client.get("/api/status").headers.get("cache-control") or "")
+
+
+def test_outdated_pages_are_told_to_reload(client):
+    """A page cached from 1.x calls the removed POST /api/sector: answer with a clear message."""
+    r = client.post("/api/sector", json={"sector": "ALPS-UPPER"})
+    assert r.status_code == 410 and "Reload" in r.json()["detail"]

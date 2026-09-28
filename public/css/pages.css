@@ -252,3 +252,12 @@ body.training .tutorial-btn { display: none; }
 #right .ctl.locked { opacity: 0.45; }
 #right .ctl.locked * { cursor: not-allowed; }
 button:disabled.icon, #speed-seg button:disabled { cursor: not-allowed; }
+
+/* new server version while the page is open */
+.upgrade {
+  position: fixed; top: 58px; left: 50%; transform: translateX(-50%); z-index: 20;
+  display: flex; align-items: center; gap: 14px; padding: 10px 14px;
+  background: var(--panel-2); border: 1px solid var(--accent); border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.5); font-size: 13px;
+}
+.upgrade .primary { padding: 6px 14px; }
