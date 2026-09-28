@@ -202,3 +202,14 @@ dl.kv dd { margin: 0; font-family: var(--mono); font-size: 12px; word-break: bre
   body.training #right { max-height: calc(100dvh - 56px - 168px - 38vh - 16px); }
   .tut-actions { flex-wrap: wrap; }
 }
+
+/* Tutorial button in the top bar: always there, highlighted until the tutorial is completed */
+.tutorial-btn {
+  flex: none; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; font-size: 12px;
+}
+.tutorial-btn:hover { border-color: var(--sel); }
+.tutorial-btn.recommended { border-color: rgba(255,225,77,0.55); color: var(--sel); }
+.tutorial-btn .cap { font-size: 13px; line-height: 1; }
+body.training .tutorial-btn { display: none; }
+@media (max-width: 1400px) { .tutorial-btn .label { display: none; } .tutorial-btn { padding: 0 8px; } }

@@ -29,3 +29,11 @@ def test_api_smoke(client):
     with client.websocket_connect("/ws") as ws:
         frame = ws.receive_json()
         assert frame["type"] == "frame" and "ac" in frame
+
+
+def test_ui_is_revalidated_after_upgrades(client):
+    """Pages and assets must not be served stale from the browser cache after a new release."""
+    for path in ("/", "/js/main.js", "/js/tutorial.js", "/css/style.css", "/admin"):
+        assert client.get(path).headers.get("cache-control") == "no-cache", path
+    assert client.get("/login").headers.get("cache-control") == "no-cache"
+    assert "no-cache" not in (client.get("/api/status").headers.get("cache-control") or "")

@@ -226,16 +226,20 @@ export class Tutorial {
       this.refreshMe();
       this.ui.toast('The tutorial stays available in the account menu.');
     };
-    $('menu-tutorial').onclick = () => {
+    const open = () => {
       $('user-pop').classList.add('hidden');
       if (this.active) { $('tutorial').classList.remove('min'); return; }
+      // unfinished: resume where they left off; completed or declined: start over
       this.start(this.me?.tutorial_state == null ? this.me?.tutorial_step || 0 : 0);
     };
+    $('menu-tutorial').onclick = open;
+    $('btn-tutorial').onclick = open;
   }
 
   async refreshMe() {
     try { this.me = await api('/api/auth/me'); } catch { return; }
     $('tut-pill').classList.toggle('hidden', this.me.tutorial_state === 'completed');
+    $('btn-tutorial').classList.toggle('recommended', this.me.tutorial_state !== 'completed');
   }
 
   /** At sign-in: offer the tutorial until completed or declined for good. */

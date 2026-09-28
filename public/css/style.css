@@ -97,7 +97,8 @@ kbd { font-family: var(--mono); background: var(--panel-2); border: 1px solid va
   box-shadow: 0 10px 30px rgba(0,0,0,0.35);
 }
 #left { top: 58px; left: 12px; width: 318px; bottom: 212px; display: flex; flex-direction: column; overflow: hidden; }
-#right { top: 58px; right: 12px; width: 312px; max-height: calc(100vh - 280px); overflow-y: auto; }
+#right { top: 58px; right: 12px; width: 360px; max-height: calc(100vh - 280px);
+  overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; }
 #bottom { left: 342px; right: 12px; bottom: 30px; height: 172px; display: flex; flex-direction: column; overflow: hidden; }
 
 .tabs { display: flex; border-bottom: 1px solid var(--border); }
@@ -288,6 +289,12 @@ table.traffic tr:hover td { background: rgba(92,200,255,0.08); }
 
 @media (max-width: 600px) {
   #top { gap: 8px; padding: 0 8px; }
+}
+@media (max-width: 400px) {
+  #top { gap: 5px; padding: 0 6px; }
+  #top .icon, .tutorial-btn, .user-btn { padding-left: 6px; padding-right: 6px; }
+}
+@media (max-width: 600px) {
   #clock { font-size: 14px; }
   .badge { padding: 2px 6px; font-size: 10px; }
   #bottom { height: 132px; }

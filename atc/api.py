@@ -213,7 +213,7 @@ def create_app():
                 return JSONResponse({"detail": "cross-origin request refused"}, status_code=403)
 
         if public:
-            return await call_next(request)
+            return _no_store_ui(path, await call_next(request))
         if user is None:
             if _is_api(path):
                 return JSONResponse({"detail": "authentication required"}, status_code=401)
@@ -227,7 +227,14 @@ def create_app():
             if _is_api(path):
                 return JSONResponse({"detail": "admin only"}, status_code=403)
             return RedirectResponse("/", status_code=302)
-        return await call_next(request)
+        return _no_store_ui(path, await call_next(request))
+
+    def _no_store_ui(path, response):
+        """After an upgrade browsers must fetch the new UI: always revalidate pages and assets
+        (cheap with ETags). Map tiles and fonts come from CDNs and are unaffected."""
+        if not _is_api(path) and "cache-control" not in response.headers:
+            response.headers["Cache-Control"] = "no-cache"
+        return response
 
     def _client_ip(request):
         if config.TRUST_PROXY:
