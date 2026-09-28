@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Example external decision-making agent for Visor ATC (standard library only).
+"""Example external decision-making agent for ATC Trainer (standard library only).
 
 It signs in (use a dedicated controller account, e.g. "agent"), takes a sector, switches the
 simulator to lockstep (the simulation only advances when the agent asks), and then loops:

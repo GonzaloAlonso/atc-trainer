@@ -1,6 +1,5 @@
 """Shared fixtures. Environment is set before any `atc` import: config is read at import time."""
 
-import math
 import os
 import tempfile
 import time
@@ -19,27 +18,12 @@ import pytest  # noqa: E402
 import atc.auth  # noqa: E402
 from atc import config  # noqa: E402
 from atc.store import Store  # noqa: E402
+from atc.training import fly, state  # noqa: E402,F401  (scenario helpers, shared with the app)
 
 atc.auth.PBKDF2_ITERATIONS = 1000   # fast hashing in tests (hashes store their iteration count)
 
 ADMIN = ("admin", "admin-password-123")
 
-FT = 0.3048
-KT = 0.514444
-
-
-def state(icao, callsign, lat, lon, alt_ft, gs_kt, trk, vs_fpm=0.0, t=0, category=4):
-    """One OpenSky state vector (extended format, 18 fields)."""
-    return [icao, callsign, "Testland", t, t, lon, lat, alt_ft * FT, False, gs_kt * KT, trk,
-            vs_fpm * FT / 60.0, None, alt_ft * FT, "1000", False, 0, category]
-
-
-def fly(lat, lon, trk, gs_kt, dt_s):
-    d = gs_kt * dt_s / 3600.0
-    h = math.radians(trk)
-    lat2 = lat + d * math.cos(h) / 60.0
-    lon2 = lon + d * math.sin(h) / (60.0 * math.cos(math.radians(lat)))
-    return lat2, lon2
 
 
 # Two airliners head-on at FL350 inside the ALPS-UPPER sector, plus one well clear at FL390.

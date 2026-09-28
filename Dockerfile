@@ -1,4 +1,4 @@
-# Visor ATC — © 2026 Gonzalo Alonso. All rights reserved.
+# ATC Trainer — © 2026 Gonzalo Alonso. All rights reserved.
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -36,7 +36,7 @@ ARG VISOR_VERSION=dev
 ARG VCS_REF=unknown
 ARG BUILD_DATE=
 ARG SOURCE_URL=
-LABEL org.opencontainers.image.title="Visor ATC" \
+LABEL org.opencontainers.image.title="ATC Trainer" \
       org.opencontainers.image.description="3D air traffic control simulator on OpenSky data, with a decision-AI API" \
       org.opencontainers.image.version="${VISOR_VERSION}" \
       org.opencontainers.image.revision="${VCS_REF}" \

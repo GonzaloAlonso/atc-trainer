@@ -13,7 +13,7 @@ def test_about_requires_login_and_states_ownership(fresh_paths):
 
 def test_about_contents(client):
     a = client.get("/api/about").json()
-    assert a["name"] == "Visor ATC" and a["version"] == __version__
+    assert a["name"] == "ATC Trainer" and a["version"] == __version__
     assert a["owner"] == "Gonzalo Alonso"
     assert a["copyright"].startswith("© 2026") and "Gonzalo Alonso. All rights reserved." in a["copyright"]
     assert "creator and developer: Gonzalo Alonso" in a["credits"]

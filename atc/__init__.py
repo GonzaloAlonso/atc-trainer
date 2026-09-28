@@ -1,4 +1,4 @@
-"""Visor ATC simulator package.
+"""ATC Trainer simulator package.
 
 Copyright (c) 2026 Gonzalo Alonso. All rights reserved.
 """

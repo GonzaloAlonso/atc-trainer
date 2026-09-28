@@ -66,6 +66,6 @@ $('change-form').onsubmit = async (e) => {
 
 // Footer: version and copyright from the public health endpoint.
 fetch('/api/health').then((r) => r.json()).then((h) => {
-  $('footer-version').textContent = `Visor ATC ${h.version}`;
+  $('footer-version').textContent = `ATC Trainer ${h.version}`;
   if (h.copyright) $('footer-copyright').textContent = h.copyright;
 }).catch(() => {});

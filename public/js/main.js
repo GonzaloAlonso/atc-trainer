@@ -8,6 +8,7 @@ import { TrafficStore, AircraftLayer } from './traffic.js';
 import { Overlay } from './overlay.js';
 import { UI } from './ui.js';
 import { api, connect } from './net.js';
+import { Tutorial } from './tutorial.js';
 
 // ---------------------------------------------------------------- renderer & scene
 const canvas = document.getElementById('gl');
@@ -104,6 +105,11 @@ const app = {
       app.route = { points: d.route, dct };
     } catch { /* aircraft left */ }
   },
+  flyTo,
+  cameraInfo() {
+    const { lat, lon } = worldToLatLon(controls.target.x, controls.target.z);
+    return { distance: camera.position.distanceTo(controls.target), lat, lon };
+  },
   onSector(id) {
     sectorLayer.setActive(id);
     const s = sectors.find((x) => x.id === id);
@@ -160,11 +166,14 @@ canvas.addEventListener('dblclick', (e) => {
 });
 
 // ---------------------------------------------------------------- data
-connect((frame) => {
+const feed = connect((frame) => {
   store.applyFrame(frame);
   ui.onFrame(frame);
   if (app.selectedId && !store.map.has(app.selectedId)) app.select(null);
-}, (up) => { if (!up) ui.toast('Connection lost — reconnecting…', true); });
+}, (up) => { if (!up) ui.toast('Connection lost — reconnecting…', true); },
+() => tutorial.sandboxGone());
+const tutorial = new Tutorial({ app, ui, store, feed });
+setInterval(() => tutorial.update(), 250);
 
 (async () => {
   try {
@@ -180,6 +189,7 @@ connect((frame) => {
   };
   pollStatus();
   setInterval(pollStatus, 5000);
+  tutorial.offer();
 })();
 setInterval(() => app.selectedId && app.refreshDetail(), 3000);
 
@@ -214,4 +224,4 @@ function frame(now) {
 }
 requestAnimationFrame(frame);
 
-window.visor = { scene, camera, controls, store, tiles, app, overlay, worldToLatLon, toWorld, FT };
+window.visor = { scene, camera, controls, store, tiles, app, overlay, tutorial, worldToLatLon, toWorld, FT };

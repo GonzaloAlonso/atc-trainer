@@ -76,7 +76,7 @@ assert not exp_commit or a["build"]["commit"] == exp_commit, "about commit"
 print("about:", a["version"], a["build"]["commit_short"], a["build"]["date"], "|", a["copyright"])
 ' "$EXPECTED_VERSION" "$EXPECTED_COMMIT" || fail "about information"
 
-acurl "$BASE/" | grep -q "Visor ATC" || fail "index page"
+acurl "$BASE/" | grep -q "ATC Trainer" || fail "index page"
 acurl "$BASE/js/main.js" >/dev/null || fail "static assets"
 acurl "$BASE/admin" | grep -q "Add user" || fail "admin page"
 acurl "$BASE/docs" >/dev/null || fail "OpenAPI docs"
@@ -90,6 +90,11 @@ acurl "$BASE/api/observation" | python3 -c 'import json,sys; d=json.load(sys.std
 
 code=$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" -X POST "$BASE/api/command" -H 'Content-Type: application/json' -d '{"text":"NOBODY C 350"}')
 [ "$code" = "400" ] || fail "command validation returned $code"
+
+# guided tutorial: a private training sandbox with the scripted aircraft
+acurl -X POST "$BASE/api/tutorial/start" >/dev/null || fail "tutorial start"
+acurl -H 'X-ATC-Context: tutorial' "$BASE/api/observation" | grep -q '"callsign":"TRN303"' || fail "tutorial sandbox traffic"
+acurl -X POST "$BASE/api/tutorial/stop" >/dev/null || fail "tutorial stop"
 
 user=$(docker exec "$NAME" id -u)
 [ "$user" != "0" ] || fail "container runs as root"

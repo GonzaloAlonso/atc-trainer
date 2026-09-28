@@ -6,6 +6,13 @@ const when = (t) => (t ? new Date(t * 1000).toLocaleString(undefined, { dateStyl
 
 let me = null;
 
+function tutorialStatus(u) {
+  if (u.tutorial_state === 'completed') return '<span class="pill">Completed</span>';
+  if (u.tutorial_state === 'dismissed') return '<span class="pill warn">Declined</span>';
+  if (u.tutorial_step > 0) return `<span class="pill warn">Lesson ${u.tutorial_step + 1}</span>`;
+  return '<span class="dim">Not started</span>';
+}
+
 function toast(msg, err = false) {
   const t = $('toast');
   t.textContent = msg;
@@ -36,9 +43,11 @@ async function load() {
             <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Admin</option>
           </select></td>
       <td><button data-act="toggle" class="ghost-btn small" ${self ? 'disabled' : ''}>${u.disabled ? 'Disabled — enable' : 'Active — disable'}</button></td>
+      <td>${tutorialStatus(u)}</td>
       <td>${when(u.last_login)}</td>
       <td>${when(u.created)}</td>
       <td class="actions">
+        <button data-act="tutorial" class="ghost-btn small" ${u.tutorial_state == null && !u.tutorial_step ? 'disabled' : ''}>Reset tutorial</button>
         <button data-act="password" class="ghost-btn small">Reset password</button>
         <button data-act="delete" class="danger small" ${self ? 'disabled' : ''}>Delete</button>
       </td>
@@ -56,6 +65,12 @@ async function load() {
       load();
     };
     tr.querySelector('[data-act=password]').onclick = () => openPasswordDialog(u);
+    tr.querySelector('[data-act=tutorial]').onclick = async () => {
+      if (await call('PATCH', `/api/admin/users/${u.id}`, { tutorial_reset: true })) {
+        toast(`${u.username} will be offered the tutorial again`);
+      }
+      load();
+    };
     tr.querySelector('[data-act=delete]').onclick = async () => {
       if (!confirm(`Delete ${u.username}? This can't be undone.`)) return;
       if (await call('DELETE', `/api/admin/users/${u.id}`)) toast(`${u.username} deleted`);

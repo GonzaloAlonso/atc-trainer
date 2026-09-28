@@ -24,6 +24,7 @@ from .engine import Engine
 from .navdata import NavData
 from .recorder import Recorder
 from .store import Store
+from .training import TutorialManager
 
 log = logging.getLogger("visor.api")
 
@@ -92,6 +93,15 @@ class UserUpdate(BaseModel):
     password: Optional[str] = None
     disabled: Optional[bool] = None
     must_change: Optional[bool] = None
+    tutorial_reset: bool = False
+
+
+class TutorialProgress(BaseModel):
+    step: int = Field(..., ge=0, le=100)
+
+
+class TutorialScenario(BaseModel):
+    event: Literal["conflict"]
 
 
 COOKIE = "visor_session"
@@ -116,7 +126,7 @@ def _issuer(user, requested):
 
 def _public_user(u):
     return {k: u[k] for k in ("id", "username", "role", "disabled", "must_change",
-                              "created", "updated", "last_login")}
+                              "created", "updated", "last_login", "tutorial_state", "tutorial_step")}
 
 
 # ---------------------------------------------------------------------------- app
@@ -128,7 +138,8 @@ def create_app():
     auth = AuthStore()
     auth.bootstrap()
     throttle = LoginThrottle()
-    sockets = set()
+    tutorials = TutorialManager(navdata)
+    sockets = {}            # WebSocket -> user id for training-sandbox subscribers, None for live
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -138,27 +149,44 @@ def create_app():
         task = asyncio.get_event_loop().create_task(_broadcast())
         yield
         task.cancel()
+        tutorials.stop_all()
         engine.stop()
         recorder.stop()
 
-    app = FastAPI(title="Visor ATC", version=__version__, lifespan=lifespan,
+    app = FastAPI(title="ATC Trainer", version=__version__, lifespan=lifespan,
                   description="Air traffic control simulator on recorded OpenSky data.\n\n"
                               + copyright_line() + " Owner, creator and developer: Gonzalo Alonso.")
     app.state.engine = engine
 
     async def _broadcast():
-        last = None
+        last = {}               # ws -> last frame sent
+        ticks = 0
         while True:
             await asyncio.sleep(config.TICK_REAL_S)
-            frame = engine.frame
-            if frame is None or frame is last or not sockets:
+            ticks += 1
+            if ticks % 120 == 0:
+                tutorials.reap()
+            if not sockets:
                 continue
-            last = frame
-            for ws in list(sockets):
+            sandboxes = tutorials.engines()
+            for ws, uid in list(sockets.items()):
+                eng = engine if uid is None else sandboxes.get(uid)
+                if eng is None:                 # sandbox ended (stopped or reaped)
+                    sockets.pop(ws, None)
+                    try:
+                        await ws.close(code=4404)
+                    except Exception:
+                        pass
+                    continue
+                frame = eng.frame
+                if frame is None or frame is last.get(ws):
+                    continue
+                last[ws] = frame
                 try:
                     await ws.send_text(frame)
                 except Exception:
-                    sockets.discard(ws)
+                    sockets.pop(ws, None)
+                    last.pop(ws, None)
 
     # ------------------------------------------------------------------ authentication
     def _token(headers, cookies):
@@ -269,6 +297,53 @@ def create_app():
                         samesite="lax", secure=_cookie_secure(request), path="/")
         return resp
 
+    def _engine(request):
+        """The caller's private training sandbox (header X-ATC-Context: tutorial) or the shared sim."""
+        if request.headers.get("x-atc-context") == "tutorial":
+            box = tutorials.get(request.state.user["id"])
+            if box is None:
+                raise HTTPException(409, "no training session: start the tutorial first")
+            return box.engine
+        return engine
+
+    # ------------------------------------------------------------------ guided tutorial
+    @app.post("/api/tutorial/start", tags=["tutorial"])
+    def tutorial_start(request: Request):
+        """(Re)create the caller's private training sandbox. Use it with `X-ATC-Context: tutorial`."""
+        user = request.state.user
+        try:
+            box = tutorials.start(user["id"])
+        except OverflowError as exc:
+            raise HTTPException(429, str(exc))
+        return {"started": box.created, "sector": "ALPS-UPPER", "user": _public_user(auth.get_user(user["id"]))}
+
+    @app.post("/api/tutorial/stop", tags=["tutorial"])
+    def tutorial_stop(request: Request):
+        return {"stopped": tutorials.stop(request.state.user["id"])}
+
+    @app.post("/api/tutorial/scenario", tags=["tutorial"])
+    def tutorial_scenario(req: TutorialScenario, request: Request):
+        """Trigger a scripted situation in the sandbox (e.g. the head-on conflict lesson)."""
+        box = tutorials.get(request.state.user["id"])
+        if box is None:
+            raise HTTPException(409, "no training session: start the tutorial first")
+        return box.inject_conflict()
+
+    @app.post("/api/tutorial/progress", tags=["tutorial"])
+    def tutorial_progress(req: TutorialProgress, request: Request):
+        return _public_user(auth.set_tutorial(request.state.user["id"], step=req.step))
+
+    @app.post("/api/tutorial/complete", tags=["tutorial"])
+    def tutorial_complete(request: Request):
+        uid = request.state.user["id"]
+        tutorials.stop(uid)
+        return _public_user(auth.set_tutorial(uid, state="completed", step=0))
+
+    @app.post("/api/tutorial/dismiss", tags=["tutorial"])
+    def tutorial_dismiss(request: Request):
+        """"Don't remind me": stop offering the tutorial at sign-in (it stays in the menu)."""
+        return _public_user(auth.set_tutorial(request.state.user["id"], state="dismissed"))
+
     # ------------------------------------------------------------------ user administration
     @app.get("/api/admin/users", tags=["admin"])
     def list_users():
@@ -286,7 +361,7 @@ def create_app():
         try:
             return _public_user(auth.update_user(
                 user_id, actor_id=request.state.user["id"], role=req.role, password=req.password,
-                disabled=req.disabled, must_change=req.must_change))
+                disabled=req.disabled, must_change=req.must_change, tutorial_reset=req.tutorial_reset))
         except AuthError as exc:
             raise HTTPException(404 if str(exc) == "no such user" else 400, str(exc))
 
@@ -307,25 +382,34 @@ def create_app():
         if user is None or user["must_change"]:
             await ws.close(code=4401)
             return
-        sockets.add(ws)
+        uid = None
+        src = engine
+        if ws.query_params.get("ctx") == "tutorial":
+            box = tutorials.get(user["id"])
+            if box is None:
+                await ws.close(code=4404)
+                return
+            uid, src = user["id"], box.engine
+        sockets[ws] = uid
         try:
-            if engine.frame:
-                await ws.send_text(engine.frame)
+            if src.frame:
+                await ws.send_text(src.frame)
             while True:
                 await ws.receive_text()      # client messages are ignored; use REST for actions
         except WebSocketDisconnect:
             pass
         finally:
-            sockets.discard(ws)
+            sockets.pop(ws, None)
 
     # ------------------------------------------------------------------ status & static data
     @app.get("/api/status", tags=["info"])
-    def status():
+    def status(request: Request):
+        eng = _engine(request)
         return {"version": __version__, "recording": config.RECORD,
-                "recorder": recorder.status(), "ai": engine.ai_status(),
-                "sim": {"t": engine.t, "mode": engine.mode, "speed": engine.speed,
-                        "paused": engine.paused, "lockstep": engine.lockstep,
-                        "aircraft": len(engine.aircraft)},
+                "recorder": recorder.status(), "ai": eng.ai_status(),
+                "sim": {"t": eng.t, "mode": eng.mode, "speed": eng.speed,
+                        "paused": eng.paused, "lockstep": eng.lockstep,
+                        "aircraft": len(eng.aircraft)},
                 "area": config.EUROPE, "now": time.time()}
 
     @app.get("/api/navdata", tags=["info"])
@@ -339,95 +423,108 @@ def create_app():
 
     # ------------------------------------------------------------------ observation
     @app.get("/api/observation", tags=["agent"])
-    def observation(sector_only: bool = False):
+    def observation(request: Request, sector_only: bool = False):
         """Complete typed state: aircraft, conflicts, open decision points, score."""
-        return engine.observation(sector_only)
+        eng = _engine(request)
+        return eng.observation(sector_only)
 
     @app.get("/api/aircraft/{ident}", tags=["agent"])
-    def aircraft(ident: str):
-        d = engine.aircraft_detail(ident)
+    def aircraft(ident: str, request: Request):
+        eng = _engine(request)
+        d = eng.aircraft_detail(ident)
         if d is None:
             raise HTTPException(404, "no such aircraft")
         return d
 
     @app.get("/api/events", tags=["agent"])
-    def events(since: int = 0):
-        return engine.events_since(since)
+    def events(request: Request, since: int = 0):
+        eng = _engine(request)
+        return eng.events_since(since)
 
     # ------------------------------------------------------------------ actions
     @app.post("/api/clearance", tags=["agent"])
     def clearance(req: ClearanceRequest, request: Request):
+        eng = _engine(request)
         try:
             clrs = [Clearance(c.kind, c.value, c.direction) for c in req.clearances]
-            return engine.issue(req.aircraft, clrs, _issuer(request.state.user, req.issuer))
+            return eng.issue(req.aircraft, clrs, _issuer(request.state.user, req.issuer))
         except ValueError as exc:
             raise HTTPException(400, str(exc))
 
     @app.post("/api/command", tags=["agent"])
     def command(req: CommandRequest, request: Request):
         """ATC shorthand, e.g. `DLH4AB C 370`, `EZY12 TL 270`, `RYR1 DCT KPT`, `AFR7 RON`."""
+        eng = _engine(request)
         try:
-            return engine.command(req.text, _issuer(request.state.user, req.issuer))
+            return eng.command(req.text, _issuer(request.state.user, req.issuer))
         except ValueError as exc:
             raise HTTPException(400, str(exc))
 
     @app.get("/api/decisions", tags=["agent"])
-    def list_decisions(status: Optional[str] = "open"):
-        with engine.lock:
-            return [dp.to_dict() for dp in engine.decisions.values()
+    def list_decisions(request: Request, status: Optional[str] = "open"):
+        eng = _engine(request)
+        with eng.lock:
+            return [dp.to_dict() for dp in eng.decisions.values()
                     if status is None or dp.status == status]
 
     @app.post("/api/decisions/{dp_id}", tags=["agent"])
     def answer(dp_id: str, req: DecisionAnswer, request: Request):
+        eng = _engine(request)
         try:
-            return engine.answer_decision(dp_id, req.answers, _issuer(request.state.user, req.by))
+            return eng.answer_decision(dp_id, req.answers, _issuer(request.state.user, req.by))
         except ValueError as exc:
             raise HTTPException(400, str(exc))
 
     @app.post("/api/decisions/{dp_id}/dismiss", tags=["agent"])
-    def dismiss(dp_id: str):
-        engine.dismiss_decision(dp_id)
+    def dismiss(dp_id: str, request: Request):
+        eng = _engine(request)
+        eng.dismiss_decision(dp_id)
         return {"ok": True}
 
     # ------------------------------------------------------------------ control
     @app.post("/api/sim", tags=["control"])
-    def sim(req: SimControl):
+    def sim(req: SimControl, request: Request):
+        eng = _engine(request)
         try:
             if req.action == "pause":
-                engine.set_paused(True)
+                eng.set_paused(True)
             elif req.action == "resume":
-                engine.set_paused(False)
+                eng.set_paused(False)
             elif req.action == "speed":
-                engine.set_speed(req.speed or 1.0)
+                eng.set_speed(req.speed or 1.0)
             elif req.action == "lockstep":
-                engine.set_lockstep(bool(req.lockstep))
+                eng.set_lockstep(bool(req.lockstep))
             elif req.action == "step":
-                if not engine.lockstep:
+                if not eng.lockstep:
                     raise ValueError("enable lockstep first")
-                engine.step(max(0.1, min(600.0, req.dt or 5.0)))
-                with engine.lock:
-                    engine._build_frame()
-                return engine.observation()
+                eng.step(max(0.1, min(600.0, req.dt or 5.0)))
+                with eng.lock:
+                    eng._build_frame()
+                return eng.observation()
             elif req.action == "reset":
+                if eng is not engine:
+                    raise ValueError("restart the training scenario with POST /api/tutorial/start")
                 start = req.start
                 if start is None and req.hours_ago is not None:
                     start = time.time() - req.hours_ago * 3600
-                engine.reset(req.mode or "live", start)
+                eng.reset(req.mode or "live", start)
         except ValueError as exc:
             raise HTTPException(400, str(exc))
-        return status()
+        return status(request)
 
     @app.post("/api/sector", tags=["control"])
-    def set_sector(req: SectorRequest):
+    def set_sector(req: SectorRequest, request: Request):
+        eng = _engine(request)
         if req.sector and req.sector not in sectors.BY_ID:
             raise HTTPException(400, "unknown sector")
-        engine.set_sector(req.sector)
+        eng.set_sector(req.sector)
         return {"sector": req.sector}
 
     @app.post("/api/ai", tags=["control"])
-    def set_ai(req: AiRequest):
+    def set_ai(req: AiRequest, request: Request):
+        eng = _engine(request)
         try:
-            return engine.set_ai(req.mode, req.agent)
+            return eng.set_ai(req.mode, req.agent)
         except ValueError as exc:
             raise HTTPException(400, str(exc))
 

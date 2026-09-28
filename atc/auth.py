@@ -51,7 +51,9 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE INDEX IF NOT EXISTS sessions_user ON sessions (user_id);
 """
 
-USER_FIELDS = "id, username, role, disabled, must_change, created, updated, last_login"
+USER_FIELDS = ("id, username, role, disabled, must_change, created, updated, last_login, "
+               "tutorial_state, tutorial_step")
+TUTORIAL_STATES = (None, "completed", "dismissed")
 
 
 class AuthError(ValueError):
@@ -117,8 +119,27 @@ class AuthStore:
         self._db.row_factory = sqlite3.Row
         self._db.execute("PRAGMA foreign_keys=ON")
         self._db.execute("PRAGMA journal_mode=WAL")
-        self._db.executescript(SCHEMA)
         self._lock = threading.Lock()
+        self._db.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self):
+        """Add tutorial columns to databases created before the tutorial existed.
+
+        Accounts that already exist at that moment are treated as trained (tutorial completed);
+        only accounts created afterwards are offered the tutorial.
+        """
+        cols = {r[1] for r in self._db.execute("PRAGMA table_info(users)")}
+        if "tutorial_state" in cols:
+            return
+        with self._lock:
+            self._db.execute("BEGIN")
+            self._db.execute("ALTER TABLE users ADD COLUMN tutorial_state TEXT")
+            self._db.execute("ALTER TABLE users ADD COLUMN tutorial_step INTEGER NOT NULL DEFAULT 0")
+            self._db.execute("ALTER TABLE users ADD COLUMN tutorial_updated REAL")
+            self._db.execute("UPDATE users SET tutorial_state = 'completed', tutorial_updated = ?",
+                             (time.time(),))
+            self._db.execute("COMMIT")
 
     def _q(self, sql, args=()):
         with self._lock:
@@ -178,7 +199,20 @@ class AuthStore:
             raise AuthError("username '%s' is already taken" % username)
         return self.get_user(cur.lastrowid)
 
-    def update_user(self, user_id, actor_id=None, role=None, password=None, disabled=None, must_change=None):
+    def set_tutorial(self, user_id, state="keep", step=None):
+        """Record tutorial progress. state: None (not finished), 'completed' or 'dismissed'."""
+        sets, args = ["tutorial_updated = ?"], [time.time()]
+        if state != "keep":
+            if state not in TUTORIAL_STATES:
+                raise AuthError("invalid tutorial state")
+            sets.append("tutorial_state = ?"); args.append(state)
+        if step is not None:
+            sets.append("tutorial_step = ?"); args.append(max(0, int(step)))
+        self._q("UPDATE users SET %s WHERE id = ?" % ", ".join(sets), (*args, user_id))
+        return self.get_user(user_id)
+
+    def update_user(self, user_id, actor_id=None, role=None, password=None, disabled=None, must_change=None,
+                    tutorial_reset=False):
         user = self.get_user(user_id)
         if user is None:
             raise AuthError("no such user")
@@ -199,6 +233,8 @@ class AuthStore:
             sets.append("disabled = ?"); args.append(int(bool(disabled)))
         if must_change is not None:
             sets.append("must_change = ?"); args.append(int(bool(must_change)))
+        if tutorial_reset:
+            sets.append("tutorial_state = NULL"); sets.append("tutorial_step = 0")
         if sets:
             sets.append("updated = ?"); args.append(time.time())
             self._q("UPDATE users SET %s WHERE id = ?" % ", ".join(sets), (*args, user_id))
@@ -309,7 +345,7 @@ class LoginThrottle:
 
 # ---------------------------------------------------------------------------- CLI
 def _cli():
-    ap = argparse.ArgumentParser(prog="python -m atc.auth", description="Manage Visor ATC users")
+    ap = argparse.ArgumentParser(prog="python -m atc.auth", description="Manage ATC Trainer users")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("list", help="list users")
     sp = sub.add_parser("set-password", help="set a user's password (and optionally create/promote)")

@@ -8,7 +8,7 @@ def test_api_smoke(client):
     assert "coverage" in st["recorder"]
 
     assert client.get("/").status_code == 200
-    assert "Visor" in client.get("/").text
+    assert "ATC Trainer" in client.get("/").text
     assert client.get("/js/main.js").status_code == 200
 
     obs = client.get("/api/observation").json()

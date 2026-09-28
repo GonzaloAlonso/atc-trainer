@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="author" content="Gonzalo Alonso" />
   <meta name="copyright" content="© 2026 Gonzalo Alonso. All rights reserved." />
-  <title>Visor ATC</title>
+  <title>ATC Trainer</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
@@ -25,7 +25,7 @@
   <canvas id="overlay"></canvas>
 
   <header id="top">
-    <div class="brand"><span class="logo"></span>VISOR<span class="sub">ATC</span></div>
+    <div class="brand"><span class="logo"></span>ATC<span class="sub">TRAINER</span></div>
     <div class="clock">
       <div id="clock">--:--:--</div>
       <div id="date">UTC</div>
@@ -56,9 +56,10 @@
       <button id="user-btn" class="user-btn" title="Account"><span class="dot"></span><span id="user-name">…</span> ▾</button>
       <div id="user-pop" class="menu hidden">
         <div id="user-role" class="menu-head"></div>
+        <button id="menu-tutorial">Tutorial <span id="tut-pill" class="pill warn hidden">recommended</span></button>
         <button id="menu-password">Change password</button>
         <a id="menu-admin" href="/admin" class="hidden">Manage users</a>
-        <button id="menu-about">About Visor ATC</button>
+        <button id="menu-about">About ATC Trainer</button>
         <button id="menu-logout">Sign out</button>
       </div>
     </div>
@@ -151,12 +152,55 @@
     </form>
   </footer>
 
-  <div id="statusbar"><span><button id="version-link" class="linkish" title="About Visor ATC"></button> <span id="rec-status"></span></span><span id="attribution"><span class="attr-long"></span><span class="attr-short"></span></span></div>
+  <div id="statusbar"><span><button id="version-link" class="linkish" title="About ATC Trainer"></button> <span id="rec-status"></span></span><span id="attribution"><span class="attr-long"></span><span class="attr-short"></span></span></div>
   <div id="toast" class="hidden"></div>
+
+  <!-- Guided tutorial -->
+  <section id="tutorial" class="tut hidden" aria-live="polite" aria-labelledby="tut-title">
+    <div class="tut-head">
+      <span id="tut-step" class="tut-step"></span>
+      <span class="tut-tag">TRAINING</span>
+      <button id="tut-min" class="icon" title="Minimise / expand">▁</button>
+      <button id="tut-exit" class="icon" title="Leave the tutorial (progress is saved)">×</button>
+    </div>
+    <div class="tut-scroll">
+      <h2 id="tut-title"></h2>
+      <div id="tut-body" class="tut-body"></div>
+      <div id="tut-goal" class="tut-goal">
+        <span class="tut-check" aria-hidden="true"></span>
+        <div><b>Goal</b><p id="tut-goal-text"></p></div>
+      </div>
+      <div id="tut-how" class="tut-how"></div>
+      <p id="tut-fail" class="tut-fail hidden"></p>
+    </div>
+    <div class="tut-actions">
+      <button id="tut-back" class="ghost-btn">Back</button>
+      <button id="tut-show" class="ghost-btn hidden">Show me</button>
+      <button id="tut-retry" class="ghost-btn hidden">Replay situation</button>
+      <span class="spacer"></span>
+      <button id="tut-skip" class="ghost-btn">Skip</button>
+      <button id="tut-next" class="primary">Next</button>
+    </div>
+    <div class="tut-progress"><div id="tut-bar"></div></div>
+  </section>
+
+  <dialog id="tut-offer" class="dialog tut-offer">
+    <div class="brand big"><span class="logo"></span>ATC<span class="sub">TRAINER</span></div>
+    <h2>New here? Take the guided tutorial</h2>
+    <p>In about 10–15 minutes you will learn to read the scope, give clearances, resolve a conflict and answer
+      pilot requests, step by step in a <b>private practice sector</b>. Nothing you do there affects other controllers.</p>
+    <p class="dim"><b>Strongly recommended</b> before working live traffic. It is optional and always available from the account menu.</p>
+    <p id="tut-offer-resume" class="hint hidden">You started it earlier: pick up where you left off.</p>
+    <div class="dialog-actions">
+      <button type="button" id="tut-dismiss" class="ghost-btn">Don't remind me</button>
+      <button type="button" id="tut-later" class="ghost-btn">Maybe later</button>
+      <button type="button" id="tut-start" class="primary">Start the tutorial</button>
+    </div>
+  </dialog>
 
   <dialog id="about-dialog" class="dialog about">
     <div class="about-head">
-      <div class="brand big"><span class="logo"></span>VISOR<span class="sub">ATC</span></div>
+      <div class="brand big"><span class="logo"></span>ATC<span class="sub">TRAINER</span></div>
       <button type="button" class="icon" id="about-close" aria-label="Close">×</button>
     </div>
     <p id="about-desc" class="dim"></p>

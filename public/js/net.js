@@ -1,3 +1,8 @@
+// "tutorial" routes API calls and the live feed to the caller's private training sandbox.
+let context = null;
+export function setContext(ctx) { context = ctx; }
+export function getContext() { return context; }
+
 function toLogin(extra = '') {
   const next = location.pathname + location.search;
   location.href = `/login?next=${encodeURIComponent(next)}${extra}`;
@@ -6,9 +11,10 @@ function toLogin(extra = '') {
 /** JSON API call. GET without a body; POST by default with a body; any method via `method`. */
 export async function api(path, body, method) {
   const m = method || (body === undefined ? 'GET' : 'POST');
-  const opts = { method: m };
+  const opts = { method: m, headers: {} };
+  if (context) opts.headers['X-ATC-Context'] = context;
   if (body !== undefined && m !== 'GET') {
-    opts.headers = { 'Content-Type': 'application/json' };
+    opts.headers['Content-Type'] = 'application/json';
     opts.body = JSON.stringify(body);
   }
   const res = await fetch(path, opts);
@@ -22,20 +28,36 @@ export async function api(path, body, method) {
   return data;
 }
 
-/** WebSocket with automatic reconnect. onFrame receives parsed frames. */
-export function connect(onFrame, onState) {
+/**
+ * WebSocket with automatic reconnect. onFrame receives parsed frames.
+ * Returns { reconnect() } to switch feeds after setContext(); onSandboxGone fires when the
+ * training sandbox no longer exists (stopped elsewhere or reaped while idle).
+ */
+export function connect(onFrame, onState, onSandboxGone) {
   let ws;
   let retry = 500;
+  let generation = 0;
   const open = () => {
-    ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
+    const gen = ++generation;
+    const ctx = context ? `?ctx=${encodeURIComponent(context)}` : '';
+    ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws${ctx}`);
     ws.onopen = () => { retry = 500; onState?.(true); };
-    ws.onmessage = (e) => onFrame(JSON.parse(e.data));
+    ws.onmessage = (e) => { if (gen === generation) onFrame(JSON.parse(e.data)); };
     ws.onclose = (e) => {
+      if (gen !== generation) return;                 // replaced on purpose by reconnect()
       if (e.code === 4401) { toLogin(); return; }     // session expired or revoked
+      if (e.code === 4404) { onSandboxGone?.(); return; }
       onState?.(false);
-      setTimeout(open, retry);
+      setTimeout(() => { if (gen === generation) open(); }, retry);
       retry = Math.min(retry * 2, 8000);
     };
   };
   open();
+  return {
+    reconnect() {
+      const old = ws;
+      open();
+      try { old.close(); } catch { /* ignore */ }
+    },
+  };
 }

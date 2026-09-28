@@ -1,4 +1,4 @@
-# Visor ATC — Portainer stack (Stacks → Add stack → Web editor).
+# ATC Trainer — Portainer stack (Stacks → Add stack → Web editor).
 # Runs behind an existing Caddy container on the external "proxy" network; no host ports.
 # Set VISOR_ADMIN_PASSWORD (and optionally OpenSky credentials) under "Environment variables".
 # The image is private: add ghcr.io under Portainer "Registries" (GitHub user + read:packages token).

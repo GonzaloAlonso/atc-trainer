@@ -1,4 +1,4 @@
-# Build, test, verify and release Visor ATC.
+# Build, test, verify and release ATC Trainer.
 #
 # Versioning: VERSION holds MAJOR.MINOR (e.g. "1.0"). Every successful build of the default branch
 # is released as MAJOR.MINOR.PATCH, where PATCH is one more than the highest existing
@@ -194,7 +194,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$TAG" -m "Visor ATC $VERSION" "$GITHUB_SHA"
+          git tag -a "$TAG" -m "ATC Trainer $VERSION" "$GITHUB_SHA"
           git push origin "refs/tags/$TAG"
 
       - name: Create GitHub release
@@ -211,7 +211,7 @@ jobs:
           Also tagged \`${MINOR}\` and \`latest\`. Platforms: linux/amd64, linux/arm64.
           Commit: ${GITHUB_SHA}
           EOF
-          gh release create "$TAG" --verify-tag --title "Visor ATC $VERSION" \
+          gh release create "$TAG" --verify-tag --title "ATC Trainer $VERSION" \
             --notes-file notes.md --generate-notes
 
       - name: Summary

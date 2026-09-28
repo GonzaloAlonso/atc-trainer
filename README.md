@@ -1,9 +1,9 @@
-# Visor ATC
+# ATC Trainer
 
 © 2026 Gonzalo Alonso. All rights reserved. Owner, creator and developer: **Gonzalo Alonso**.
 Proprietary software, not open source. See [LICENSE](LICENSE).
 
-A 3D air traffic control working position for European airspace. It is part game, part proof of concept that a decision-making AI can control airspace.
+An air traffic control trainer: a 3D working position for European airspace. It is part game, part proof of concept that a decision-making AI can control airspace. A guided tutorial takes newcomers from zero to handling a sector.
 
 Real traffic recorded from the [OpenSky Network](https://openskynetwork.github.io/opensky-api/rest.html) is replayed as a living scenario. You, or an AI agent, take a sector and issue clearances. Each aircraft follows its recorded trajectory until it is cleared otherwise, then flies the clearance with a simple performance model.
 
@@ -116,6 +116,32 @@ Local checks:
 docker build --build-arg VISOR_VERSION=1.0.0-local -t visor-atc:test . && scripts/smoke_test.sh visor-atc:test 1.0.0-local
 ```
 
+## Tutorial
+
+New users are offered a guided tutorial at every sign-in until they complete it. It is optional but strongly recommended. The offer has three answers: *Start*, *Maybe later* and *Don't remind me*. The tutorial is always available from the account menu (**Tutorial**).
+
+- **Private practice sector.** Each trainee gets their own sandbox simulation in the Alps Upper sector with scripted traffic. Clearances there never touch the shared live simulation or other users. Sandboxes end when the trainee leaves, and after 30 minutes idle. At most 20 run at once.
+- **A wizard with goals.** There are 14 lessons:
+  1. welcome
+  2. navigating the scope
+  3. taking a sector
+  4. reading a data block
+  5. headings
+  6. direct-to
+  7. resume own navigation
+  8. level changes
+  9. spotting an STCA
+  10. resolving the conflict
+  11. the decision assistant and AI advisory
+  12. answering a pilot request
+  13. time and score
+  14. finish
+
+  Each lesson states its goal and how to reach it, and highlights the control involved. The goal is ticked automatically when the trainee has done it. Lessons can be skipped; the conflict lesson can be replayed if separation is lost.
+- **Progress is stored per user** in `users.db`: not started, the lesson reached, completed, or declined. Trainees can resume where they left off. Admins see each user's status on the admin page and can reset it.
+- **Accounts that existed before the tutorial** are marked as completed and are not prompted; they can still open it from the menu.
+- **Agents can use the sandbox too:** `POST /api/tutorial/start`, then send `X-ATC-Context: tutorial` with any simulation API call, or connect to `/ws?ctx=tutorial`.
+
 ## Playing
 
 - **Scenario:** *Live* runs just behind the newest snapshot. *Replay* starts anywhere in the recorded window and can run at 1–16×.
@@ -200,6 +226,7 @@ The built-in agents are `rules` (the reference baseline) and `jev`.
 - `atc/clearances.py`: clearance model, shorthand parser, readback phrasing
 - `atc/conflicts.py`: STCA and loss-of-separation detection
 - `atc/decisions.py`: decision points and fast-time prediction
+- `atc/training.py`: tutorial sandboxes (scripted scenario, per-user engines, idle reaping)
 - `atc/engine.py`: simulation loop, traffic life-cycle, requests, scoring, events
 - `atc/api.py`: FastAPI REST and WebSocket
 - `public/js/`: three.js client
@@ -207,10 +234,11 @@ The built-in agents are `rules` (the reference baseline) and `jev`.
   - `traffic.js`: instanced aircraft, drop lines, vectors, trails
   - `overlay.js`: ATC symbology and data blocks
   - `ui.js`: panels, strip, radio, command line
+  - `tutorial.js`: the guided tutorial wizard (lessons, goal detection, highlights)
 
 ## About, build information and copyright
 
-The account menu has an **About Visor ATC** item; clicking the version in the status bar opens it too. It shows:
+The account menu has an **About ATC Trainer** item; clicking the version in the status bar opens it too. It shows:
 
 - **Build:** version, release or development build, git commit (linked to the source), and build date.
 - **Runtime:** Python, platform, server libraries, the client's three.js revision, and server start time.
@@ -221,7 +249,7 @@ The same information is available as JSON at `GET /api/about` (signed in).
 - **Release images:** the workflow bakes in the version, commit, build date and repository URL. They also appear as OCI labels: `org.opencontainers.image.{version,revision,created,source,authors,vendor}`.
 - **Local runs:** the version reads `dev`, and the commit is taken from git; uncommitted changes are flagged.
 
-Visor ATC is © 2026 Gonzalo Alonso, who is its owner, creator and developer. All rights reserved. It is proprietary software, not open source: no use, copying, modification or distribution without written permission (see [LICENSE](LICENSE)). The third-party data and libraries listed in the About dialog remain under their own licences and terms.
+ATC Trainer is © 2026 Gonzalo Alonso, who is its owner, creator and developer. All rights reserved. It is proprietary software, not open source: no use, copying, modification or distribution without written permission (see [LICENSE](LICENSE)). The third-party data and libraries listed in the About dialog remain under their own licences and terms.
 
 The container images are published to a **private** GHCR package. Servers pull them with registry credentials: a GitHub token with `read:packages`, set in Portainer under *Registries*, or `docker login ghcr.io`.
 

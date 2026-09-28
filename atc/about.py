@@ -56,9 +56,9 @@ def about():
     source = (os.environ.get("VISOR_SOURCE_URL") or "").rstrip("/") or None
     release = __version__ != "dev" and "-dev." not in __version__
     return {
-        "name": "Visor ATC",
-        "description": "3D air traffic control working position on live and recorded OpenSky "
-                       "data, with an API for decision-making AI agents.",
+        "name": "ATC Trainer",
+        "description": "Air traffic control trainer: a 3D working position on live and recorded "
+                       "OpenSky data, with a guided tutorial and an API for decision-making AI agents.",
         "version": __version__,
         "build": {
             "type": "release" if release else "development",

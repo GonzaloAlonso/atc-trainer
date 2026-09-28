@@ -126,7 +126,9 @@ export class UI {
     };
     $('btn-more').onclick = (e) => { e.stopPropagation(); setMore(!extra.classList.contains('open')); };
     document.addEventListener('click', (e) => {
-      if (extra.classList.contains('open') && !extra.contains(e.target) && e.target !== $('btn-more')) setMore(false);
+      // clicks in the tutorial card don't count as "outside": its lessons open this panel on purpose
+      if (extra.classList.contains('open') && !extra.contains(e.target) && !$('btn-more').contains(e.target)
+          && !e.target.closest('#tutorial')) setMore(false);
     });
     $('btn-lists').onclick = () => this.setLists(!document.body.classList.contains('lists-open'));
     this.setMore = setMore;
@@ -152,6 +154,23 @@ export class UI {
       $('settings').classList.toggle('hidden');
     };
     $('style-seg').onclick = (e) => { const s = e.target.dataset.style; if (s) this.app.setStyle(s); };
+  }
+
+  /** Switching between live traffic and the training sandbox: forget the other feed's state. */
+  resetForContext(message) {
+    this.eventSeq = 0;
+    this.sigs = {};
+    this.detail = null;
+    this.frame = null;
+    $('radio').innerHTML = '';
+    if (message) {
+      const div = document.createElement('div');
+      div.className = 'msg SYSTEM';
+      div.innerHTML = `<span class="who">SYSTEM</span><span class="txt">${esc(message)}</span>`;
+      $('radio').appendChild(div);
+    }
+    this.setMore?.(false);
+    this.setLists(false);
   }
 
   setLists(open) {
@@ -206,7 +225,7 @@ export class UI {
 
     const next = Math.max(0, rec.next_poll - st.now);
     const span = cov.first ? `${cov.snapshots} snapshots ${hhmmss(cov.first)}–${hhmmss(cov.last)} UTC` : 'no data yet';
-    $('version-link').textContent = `Visor ${st.version}`;
+    $('version-link').textContent = `ATC Trainer ${st.version}`;
     $('rec-status').textContent = `· ${st.recording ? '●' : '○ not'} recording OpenSky (${rec.authenticated ? 'authenticated' : 'anonymous'}, every ${Math.round(rec.interval_s)} s) · ${span} · next poll in ${Math.floor(next / 60)}:${String(Math.floor(next % 60)).padStart(2, '0')}${rec.credits_left != null ? ` · ${rec.credits_left} credits left` : ''}${rec.last_error ? ' · ⚠ ' + rec.last_error : ''}`;
   }
 
@@ -214,8 +233,11 @@ export class UI {
   onFrame(frame) {
     this.frame = frame;
     const badge = $('mode-badge');
-    badge.textContent = frame.lockstep ? 'LOCKSTEP' : frame.mode.toUpperCase();
-    badge.className = 'badge' + (frame.mode === 'replay' ? ' replay' : '');
+    const training = document.body.classList.contains('training');
+    badge.textContent = training ? 'TRAINING' : frame.lockstep ? 'LOCKSTEP' : frame.mode.toUpperCase();
+    badge.className = 'badge' + (training ? ' training' : frame.mode === 'replay' ? ' replay' : '');
+    $('scenario').disabled = training;
+    $('scenario').title = training ? 'The training sector runs its own scripted scenario' : '';
     $('btn-pause').textContent = frame.paused ? '▶' : '❚❚';
     for (const b of $('speed-seg').children) {
       b.classList.toggle('on', Number(b.dataset.speed) === frame.speed);
