@@ -56,3 +56,5 @@ TMA_CEILING_FT = 10000.0
 SEP_V_FT = 1000.0            # vertical separation minimum
 LOS_V_FT = 900.0             # vertical loss threshold (tolerates altimetry noise)
 PILOT_DELAY_S = (3.0, 8.0)   # pilot reaction time range
+# Human-held sectors are released after this long without the controller being online.
+SECTOR_IDLE_S = float(os.environ.get("VISOR_SECTOR_IDLE_MIN") or 10) * 60

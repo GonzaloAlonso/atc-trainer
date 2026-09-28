@@ -6,7 +6,7 @@ const $ = (id) => document.getElementById(id);
 // Aircraft of the scripted training scenario (atc/training.py)
 const TRN303 = '7a0303';
 const PAIR = ['7c0101', '7c0202'];
-const SECTOR = 'ALPS-UPPER';
+const SECTOR = 'ALP-U';
 const compact = () => window.matchMedia('(max-width: 1100px)').matches;
 const narrow = () => window.matchMedia('(max-width: 900px)').matches;
 
@@ -31,29 +31,33 @@ const STEPS = [
   {
     title: 'Find your way around the scope',
     body: '<p>The scope is a 3D map of Europe. Aircraft carry a <b>data block</b> (label) with their details.</p>',
-    goal: 'Zoom in on the Alps so the training traffic fills your screen.',
+    goal: 'Zoom in on the Alps region (around Marseille, Geneva and Turin) so the training traffic fills your screen.',
     how: `<ul><li><b>Pan</b>: drag with the left mouse button (one finger on touch screens).</li>
       <li><b>Zoom</b>: mouse wheel (pinch on touch screens).</li>
       <li><b>Rotate / tilt</b>: drag with the right mouse button (two fingers on touch screens).</li></ul>`,
-    check: (t) => { const v = t.app.cameraInfo(); return v.distance < 900 && v.lat > 44.5 && v.lat < 49.5 && v.lon > 5 && v.lon < 15; },
-    showMe: (t) => t.app.flyTo(46.9, 9.8, 700),
+    check: (t) => { const v = t.app.cameraInfo(); return v.distance < 900 && v.lat > 42 && v.lat < 47 && v.lon > 1 && v.lon < 12; },
+    showMe: (t) => t.app.flyTo(44.6, 6.6, 700),
   },
   {
-    title: 'Take responsibility for a sector',
-    body: `<p>Controllers work a <b>sector</b>: a volume of airspace with lateral limits and a floor and ceiling.
-      Once you take one, its traffic checks in on the radio and counts for your score.</p>`,
-    goal: 'Take the “Alps Upper” sector.',
-    how: () => `<p>Choose <b>Alps Upper</b> in the <b>Sector</b> menu${compact() ? ' (open the <b>⋯</b> button in the header)' : ' in the top bar'}.</p>`,
-    target: '#sector',
-    check: (t) => t.frame?.sector === SECTOR,
-    skip: (t) => api('/api/sector', { sector: SECTOR }),
-    prepare: (t) => (t.frame?.sector === SECTOR ? null : api('/api/sector', { sector: SECTOR })),
+    title: 'Take your sector',
+    body: `<p>Airspace is divided into <b>sectors</b>. Each region is also split <b>vertically</b> into layers:
+      <b>L</b>ower (up to FL245), <b>U</b>pper (FL245–345) and <b>H</b>igh (above FL345). A controller is responsible for
+      every aircraft inside the sectors they hold; nobody else can clear them.</p>
+      <p>You can see everyone's sectorization: each controller has a colour, the AI is violet, free sectors are faint outlines.</p>`,
+    goal: 'Take Alps Upper (ALP-U).',
+    how: () => `<p>Open the <b>Sectors</b> ${narrow() ? 'list with the <b>☰</b> button' : 'tab on the left'}
+      (or press <b>My sectors</b>${compact() ? ' in the <b>⋯</b> panel' : ' in the top bar'}), find <b>Alps</b> and press
+      <b>Take</b> on the <b>U</b> layer.</p>`,
+    target: `[data-sact="take"][data-sid="${SECTOR}"]`,
+    check: (t) => (t.frame?.me?.sectors ?? []).includes(SECTOR),
+    skip: (t) => api(`/api/sectors/${SECTOR}/take`, {}),
+    prepare: (t) => ((t.frame?.me?.sectors ?? []).includes(SECTOR) ? null : api(`/api/sectors/${SECTOR}/take`, {})),
   },
   {
     title: 'Read a data block',
     body: `<p>Each data block shows, line by line:</p>
       <ul><li><b>Callsign</b> (e.g. <code>TRN303</code>), plus <b>H</b> for heavy aircraft.</li>
-      <li><b>Flight level</b> (<code>330</code> = 33,000 ft), a trend arrow ↑/↓ when climbing or descending, then the <b>cleared level</b>.</li>
+      <li><b>Flight level</b> (<code>290</code> = 29,000 ft), a trend arrow ↑/↓ when climbing or descending, then the <b>cleared level</b>.</li>
       <li><b>Ground speed</b> in knots and any lateral instruction (heading or direct-to).</li></ul>
       <p>The line ahead of each aircraft is its <b>speed vector</b>: where it will be in 2 minutes.</p>`,
     goal: 'Select TRN303, your practice aircraft.',
@@ -94,11 +98,11 @@ const STEPS = [
   {
     title: 'Change level',
     body: '<p>Vertical clearances are the most common tool: climbing or descending an aircraft by 1000 ft is often enough to keep it clear of others.</p>',
-    goal: 'Climb TRN303 to flight level 370.',
-    how: `<p>In the flight strip set <b>Level</b> to <code>370</code> (use + / −) and press <b>Climb</b>.
-      Or type <code>TRN303 C 370</code>.</p>`,
+    goal: 'Climb TRN303 to flight level 330.',
+    how: `<p>In the flight strip set <b>Level</b> to <code>330</code> (use + / −) and press <b>Climb</b>.
+      Or type <code>TRN303 C 330</code>. It stays inside your sector: Alps Upper goes up to FL345.</p>`,
     target: '#c-fl',
-    check: (t) => t.rec(TRN303)?.cfl === 370,
+    check: (t) => t.rec(TRN303)?.cfl === 330,
     enter: (t) => { if (t.app.selectedId !== TRN303) t.app.select(TRN303); },
   },
   {
@@ -113,7 +117,7 @@ const STEPS = [
     check: (t) => t.pairInConflict() && PAIR.includes(t.app.selectedId),
     enter: (t) => {
       if (!t.pairPresent()) api('/api/tutorial/scenario', { event: 'conflict' }).catch(() => {});
-      t.app.flyTo(46.85, 11.2, 650);
+      t.app.flyTo(44.3, 7.3, 650);
     },
     prepare: (t) => (t.pairPresent() ? null : api('/api/tutorial/scenario', { event: 'conflict' })),
   },
@@ -122,7 +126,7 @@ const STEPS = [
     body: `<p>Separate them before they get closer than 5 NM at the same level.
       A <b>vertical</b> solution is usually the simplest: move one of them 1000 ft up or down.</p>`,
     goal: 'Give TRN101 or TRN202 a new level and keep them separated until they have passed.',
-    how: `<p>Select one and type e.g. <code>TRN101 C 360</code> or <code>TRN202 D 340</code>.
+    how: `<p>Select one and type e.g. <code>TRN101 C 320</code> or <code>TRN202 D 300</code>.
       The <b>Decisions</b> tab also offers ready-made options, each with its predicted outcome.
       The goal is reached once they have passed each other <b>without</b> a loss of separation.</p>`,
     target: '#cmd',
@@ -150,16 +154,16 @@ const STEPS = [
   },
   {
     title: 'Answer a pilot request',
-    body: `<p>Pilots ask for what they need. TRN303 is at FL370, but its flight plan is at FL330,
+    body: `<p>Pilots ask for what they need. TRN303 is at FL330, but its flight plan is at FL290,
       so the crew will soon request a descent. Unanswered requests expire and cost points.</p>`,
-    goal: 'Grant TRN303’s request to descend to FL330.',
-    how: () => `<p>When “TRN303, request descent FL330” appears on the radio, open <b>Decisions</b>
+    goal: 'Grant TRN303’s request to descend to FL290.',
+    how: () => `<p>When “TRN303, request descent FL290” appears on the radio, open <b>Decisions</b>
       ${narrow() ? '(☰ button)' : 'on the left'} and press <b>Issue</b> on the approve option (or <b>Accept</b> the AI suggestion).
-      You can also type <code>TRN303 D 330</code>. Speed up time if you are waiting.</p>`,
+      You can also type <code>TRN303 D 290</code>. Speed up time if you are waiting.</p>`,
     target: () => (narrow() ? '#btn-lists' : '[data-tab=decisions]'),
-    check: (t) => t.rec(TRN303)?.cfl === 330
+    check: (t) => t.rec(TRN303)?.cfl === 290
       || (t.frame?.decisions ?? []).some((d) => d.kind === 'level_request' && d.subjects.includes(TRN303) && d.status === 'executed'),
-    prepare: (t) => (t.rec(TRN303)?.cfl === 370 ? null : api('/api/command', { text: 'TRN303 C 370' })),
+    prepare: (t) => (t.rec(TRN303)?.cfl === 330 ? null : api('/api/command', { text: 'TRN303 C 330' })),
   },
   {
     title: 'Time and score',
@@ -264,10 +268,10 @@ export class Tutorial {
     this.done = new Set();
     this.state = {};
     document.body.classList.add('training');
-    this.ui.resetForContext('Training session started in your private Alps Upper sector.');
+    this.ui.resetForContext('Training session started in your private copy of the Alps region.');
     this.app.select(null);
     this.feed.reconnect();
-    this.app.flyTo(46.9, 9.8, 2400);
+    this.app.flyTo(44.6, 6.6, 2400);
     $('tutorial').classList.remove('hidden', 'min');
     await this.go(Math.min(step, STEPS.length - 1), true);
   }
@@ -358,7 +362,11 @@ export class Tutorial {
       goal.classList.toggle('met', met);
       $('tut-next').disabled = !met;
       $('tut-next').classList.toggle('pulse', met && !s.info);
-      if (met) $('tutorial').classList.remove('min');
+      if (met) {
+        $('tutorial').classList.remove('min');
+        // on phones the lists sheet covers the wizard: close it so the trainee sees the tick
+        if (!force && !s.info && narrow() && document.body.classList.contains('lists-open')) this.ui.setLists(false);
+      }
     }
     const failure = s.failed?.(this);
     $('tut-fail').innerHTML = failure ?? '';
@@ -368,16 +376,20 @@ export class Tutorial {
   }
 
   highlight(selector) {
-    if (selector === this._hl) return;
+    // lists re-render (e.g. the Sectors tab when assignments change): re-apply if the mark is gone
+    if (selector === this._hl && (!selector || document.querySelector('.tut-highlight'))) return;
     document.querySelectorAll('.tut-highlight').forEach((el) => el.classList.remove('tut-highlight'));
     this._hl = selector;
     if (!selector) return;
     const el = document.querySelector(selector);
-    if (!el) return;
+    if (!el) { this._hl = undefined; return; }        // not rendered yet: retry on the next tick
     // controls that live in the compact header panel or the lists sheet must be visible first
     if (compact() && el.closest('#top-extra')) this.ui.setMore(true);
     if (narrow() && el.closest('#left')) this.ui.setLists(true);
     if (el.closest('.tab')) document.querySelector(`[data-tab=${el.closest('.tab').id.slice(4)}]`)?.click();
-    (el.closest('label.field') ?? el).classList.add('tut-highlight');
+    const mark = el.closest('label.field') ?? el;
+    mark.classList.add('tut-highlight');
+    // long lists (e.g. Sectors): bring the control into view
+    if (mark.closest('.tab-body')) mark.scrollIntoView({ block: 'center', behavior: 'smooth' });
   }
 }

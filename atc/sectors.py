@@ -1,50 +1,89 @@
-"""Control sectors the player (or an AI agent) can take responsibility for.
+"""Sectorization: lateral regions stacked in vertical layers.
 
-Boundaries are simplified approximations inspired by real European airspace, not official data.
+Twelve regions tile the core of the European traffic area without overlapping; each is split
+vertically into Lower / Upper / High layers, giving 36 sectors. Airspace outside the regions is
+unmanned. Boundaries are simplified approximations inspired by real area control centres, not
+official airspace data.
+
+A position belongs to at most one sector:  region polygon (lateral) × layer band (vertical),
+with layer bands half-open [fl_min, fl_max).
 """
 
 from .geo import point_in_polygon
 
-SECTORS = [
-    {
-        "id": "MUAC-DECO", "name": "Maastricht Upper — Delta/Coastal",
-        "fl_min": 245, "fl_max": 660,
-        "poly": [(53.6, 3.0), (53.9, 7.2), (52.3, 9.2), (50.3, 8.4), (49.6, 6.0), (50.2, 2.6), (51.6, 2.0)],
-    },
-    {
-        "id": "ALPS-UPPER", "name": "Alps Upper",
-        "fl_min": 245, "fl_max": 660,
-        "poly": [(48.2, 5.8), (48.5, 9.8), (48.2, 13.5), (46.6, 14.6), (45.5, 12.4), (45.3, 8.2), (46.2, 5.6)],
-    },
-    {
-        "id": "LONDON-TMA", "name": "London Terminal",
-        "fl_min": 0, "fl_max": 245,
-        "poly": [(52.4, -1.6), (52.5, 0.6), (51.9, 1.6), (50.9, 1.2), (50.6, -0.6), (51.0, -1.9)],
-    },
-    {
-        "id": "PARIS-EST", "name": "Paris East",
-        "fl_min": 195, "fl_max": 660,
-        "poly": [(50.0, 2.0), (49.9, 5.4), (48.2, 5.8), (46.9, 4.8), (47.2, 2.2), (48.6, 1.4)],
-    },
-    {
-        "id": "IBERIA-N", "name": "Iberia North",
-        "fl_min": 195, "fl_max": 660,
-        "poly": [(43.8, -9.4), (43.5, -1.8), (42.5, 3.2), (40.8, 1.0), (40.0, -4.0), (41.0, -8.8)],
-    },
-    {
-        "id": "BALKANS", "name": "Balkans Upper",
-        "fl_min": 285, "fl_max": 660,
-        "poly": [(47.0, 15.8), (46.6, 21.5), (44.4, 23.0), (42.0, 22.6), (41.6, 19.4), (43.6, 15.4)],
-    },
+# id, name, floor FL, ceiling FL
+LAYERS = [
+    ("L", "Lower", 0, 245),
+    ("U", "Upper", 245, 345),
+    ("H", "High", 345, 660),
 ]
 
+
+def _box(lat0, lat1, lon0, lon1):
+    return [(lat0, lon0), (lat1, lon0), (lat1, lon1), (lat0, lon1)]
+
+
+# Regions share edges so they tile without gaps or overlaps (see tests/test_sectors.py).
+REGIONS = [
+    # north row, 50.0–55.5 N
+    {"id": "LON", "name": "London", "poly": _box(50.0, 55.5, -6.0, 1.5)},
+    {"id": "MAS", "name": "Maastricht", "poly": _box(50.0, 55.5, 1.5, 9.0)},
+    {"id": "BER", "name": "Berlin", "poly": _box(50.0, 55.5, 9.0, 16.0)},
+    # middle row, 46.0–50.0 N
+    {"id": "BRE", "name": "Brest", "poly": _box(46.0, 50.0, -6.0, 1.0)},
+    {"id": "PAR", "name": "Paris", "poly": _box(46.0, 50.0, 1.0, 6.0)},
+    {"id": "RHN", "name": "Rhine", "poly": _box(46.0, 50.0, 6.0, 11.0)},
+    {"id": "DAN", "name": "Danube", "poly": _box(46.0, 50.0, 11.0, 17.0)},
+    # south row, 43.0–46.0 N
+    {"id": "BOR", "name": "Bordeaux", "poly": _box(43.0, 46.0, -3.0, 3.0)},
+    {"id": "ALP", "name": "Alps", "poly": _box(43.0, 46.0, 3.0, 10.0)},
+    {"id": "PAD", "name": "Padova", "poly": _box(43.0, 46.0, 10.0, 16.0)},
+    {"id": "BAL", "name": "Balkans", "poly": _box(42.0, 46.0, 16.0, 23.0)},
+    # Iberia, 37.0–43.0 N
+    {"id": "MAD", "name": "Madrid", "poly": _box(37.0, 43.0, -9.5, 3.0)},
+]
+
+for _r in REGIONS:
+    lats = [p[0] for p in _r["poly"]]
+    lons = [p[1] for p in _r["poly"]]
+    _r["bbox"] = (min(lats), max(lats), min(lons), max(lons))
+
+SECTORS = [
+    {
+        "id": "%s-%s" % (r["id"], lid), "name": "%s %s" % (r["name"], lname),
+        "region": r["id"], "layer": lid, "fl_min": fmin, "fl_max": fmax, "poly": r["poly"],
+    }
+    for r in REGIONS for lid, lname, fmin, fmax in LAYERS
+]
 BY_ID = {s["id"]: s for s in SECTORS}
+REGION_BY_ID = {r["id"]: r for r in REGIONS}
 
 
-def contains(sector, lat, lon, alt_ft):
-    if sector is None:
-        return True
+def region_at(lat, lon):
+    for r in REGIONS:
+        la0, la1, lo0, lo1 = r["bbox"]
+        if la0 <= lat <= la1 and lo0 <= lon <= lo1 and point_in_polygon(lat, lon, r["poly"]):
+            return r
+    return None
+
+
+def sector_at(lat, lon, alt_ft):
+    """Sector id containing the position, or None for unmanned airspace."""
+    r = region_at(lat, lon)
+    if r is None:
+        return None
     fl = alt_ft / 100.0
-    if fl < sector["fl_min"] or fl > sector["fl_max"]:
-        return False
-    return point_in_polygon(lat, lon, sector["poly"])
+    for lid, _, fmin, fmax in LAYERS:
+        if fmin <= fl < fmax:
+            return "%s-%s" % (r["id"], lid)
+    return None
+
+
+def catalogue():
+    """Static description for clients: regions, layers and sectors."""
+    return {
+        "layers": [{"id": l, "name": n, "fl_min": a, "fl_max": b} for l, n, a, b in LAYERS],
+        "regions": [{"id": r["id"], "name": r["name"], "poly": r["poly"]} for r in REGIONS],
+        "sectors": [{k: s[k] for k in ("id", "name", "region", "layer", "fl_min", "fl_max", "poly")}
+                    for s in SECTORS],
+    }

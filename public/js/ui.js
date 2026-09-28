@@ -1,6 +1,7 @@
 import { REVISION } from 'three';
 import { api } from './net.js';
 import { F } from './traffic.js';
+import { holderColor, holderName } from './holders.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -141,11 +142,7 @@ export class UI {
       const body = v === 'live' ? { action: 'reset', mode: 'live' } : { action: 'reset', mode: 'replay', start: Number(v) };
       this.call('/api/sim', body).then((r) => r && this.toast(v === 'live' ? 'Live traffic' : `Replay from ${hhmmss(Number(v))} UTC`));
     };
-    $('sector').onchange = (e) => {
-      const id = e.target.value || null;
-      this.call('/api/sector', { sector: id });
-      this.app.onSector(id);
-    };
+    $('my-sectors').onclick = (e) => { e.stopPropagation(); this.setMore(false); this.openTab('sectors'); };
     $('ai-mode').onchange = () => this.setAi();
     $('ai-agent').onchange = () => this.setAi();
     $('btn-settings').onclick = (e) => {
@@ -173,6 +170,12 @@ export class UI {
     this.setLists(false);
   }
 
+  /** Show a left-panel tab (on phones the lists live in a sheet behind ☰). */
+  openTab(name) {
+    document.querySelector(`.tabs [data-tab=${name}]`)?.click();
+    if (window.matchMedia('(max-width: 900px)').matches) this.setLists(true);
+  }
+
   setLists(open) {
     document.body.classList.toggle('lists-open', open);
     $('btn-lists').setAttribute('aria-expanded', String(open));
@@ -188,13 +191,22 @@ export class UI {
     this.call('/api/sim', { action: this.frame.paused ? 'resume' : 'pause' });
   }
 
-  setSectors(sectors) {
-    const sel = $('sector');
-    for (const s of sectors) {
-      const o = document.createElement('option');
-      o.value = s.id;
-      o.textContent = `${s.name} (FL${pad3(s.fl_min)}–${s.fl_max >= 600 ? 'UNL' : pad3(s.fl_max)})`;
-      sel.appendChild(o);
+  /** Static sectorization catalogue from /api/sectors: regions × vertical layers. */
+  setSectors(catalogue) {
+    this.catalogue = catalogue;
+    this.sectorById = new Map(catalogue.sectors.map((s) => [s.id, s]));
+  }
+
+  sectorName(sid) { return this.sectorById?.get(sid)?.name ?? sid; }
+
+  async sectorAction(action, sid) {
+    const path = { take: 'take', release: 'release', ai: 'assign-ai', force: 'take' }[action];
+    const body = action === 'force' ? { force: true } : action === 'ai' ? { agent: $('ai-agent').value || 'rules' } : {};
+    const r = await this.call(`/api/sectors/${sid}/${path}`, body);
+    if (r) {
+      this.toast({ take: 'You now control', force: 'You took over', release: 'Released', ai: 'AI now controls' }[action]
+        + ` ${this.sectorName(sid)}`);
+      this.sigs.sectors = null;
     }
   }
 
@@ -236,22 +248,31 @@ export class UI {
     const training = document.body.classList.contains('training');
     badge.textContent = training ? 'TRAINING' : frame.lockstep ? 'LOCKSTEP' : frame.mode.toUpperCase();
     badge.className = 'badge' + (training ? ' training' : frame.mode === 'replay' ? ' replay' : '');
-    $('scenario').disabled = training;
-    $('scenario').title = training ? 'The training sector runs its own scripted scenario' : '';
+    // the shared simulation's clock and scenario are admin-only; a trainee's sandbox is theirs
+    const simLocked = !training && this.me?.role !== 'admin';
+    const lockTip = simLocked ? 'Only admins can change the shared simulation' : '';
+    $('scenario').disabled = training || simLocked;
+    $('scenario').title = training ? 'The training sector runs its own scripted scenario' : lockTip;
     $('btn-pause').textContent = frame.paused ? '▶' : '❚❚';
+    $('btn-pause').disabled = simLocked;
+    $('btn-pause').title = simLocked ? lockTip : 'Pause / resume (Space)';
     for (const b of $('speed-seg').children) {
       b.classList.toggle('on', Number(b.dataset.speed) === frame.speed);
-      b.disabled = frame.mode === 'live' && b.dataset.speed !== '1';
+      b.disabled = simLocked || (frame.mode === 'live' && b.dataset.speed !== '1');
+      b.title = lockTip;
     }
-    if ($('sector').value !== (frame.sector ?? '')) { $('sector').value = frame.sector ?? ''; this.app.onSector(frame.sector); }
     if (document.activeElement !== $('ai-mode')) $('ai-mode').value = frame.ai.mode;
 
+    const mySectors = frame.me?.sectors ?? [];
+    $('my-sectors-text').textContent = mySectors.length ? mySectors.join(' + ') : 'No sector';
+    $('my-sectors').classList.toggle('none', !mySectors.length);
+
     const s = frame.score;
-    $('score').innerHTML = `<span class="pts">${s.points ?? 0}</span>` +
+    $('score').innerHTML = `<span class="pts" title="your score">${s.points ?? 0}</span>` +
       `<span>LoS <b>${s.los ?? 0}</b></span><span>STCA <b>${s.stca ?? 0}</b></span>` +
       `<span>REQ <b>${s.requests_granted ?? 0}</b>/<b>${s.requests_expired ?? 0}</b></span>` +
       `<span>HND <b>${s.handled ?? 0}</b></span>` +
-      `<span title="clearances: you / AI"><b style="color:var(--human)">${s.clearances_human ?? 0}</b>/<b style="color:var(--ai)">${s.clearances_ai ?? 0}</b></span>`;
+      `<span title="clearances you issued">CLR <b style="color:var(--human)">${s.clearances ?? 0}</b></span>`;
 
     if (frame.event_seq > this.eventSeq) this.pullEvents();
     const now = performance.now();
@@ -260,6 +281,7 @@ export class UI {
       this.renderAlerts();
       this.renderDecisions();
       this.renderTraffic();
+      this.renderSectors();
     }
   }
 
@@ -284,7 +306,7 @@ export class UI {
 
   renderAlerts() {
     const f = this.frame;
-    const conf = f.conflicts.filter((c) => c[6]).sort((a, b) => (a[2] === 'LOS' ? -1 : 0) - (b[2] === 'LOS' ? -1 : 0) || a[3] - b[3]);
+    const conf = [...f.conflicts].sort((a, b) => (a[2] === 'LOS' ? -1 : 0) - (b[2] === 'LOS' ? -1 : 0) || a[3] - b[3]);
     const reqs = f.decisions.filter((d) => d.status === 'open' && d.kind !== 'conflict');
     const sig = JSON.stringify([conf.map((c) => [c[0], c[1], c[2], Math.round(c[3] / 10)]), reqs.map((r) => r.id)]);
     const n = $('n-alerts');
@@ -297,7 +319,9 @@ export class UI {
     this.sigs.alerts = sig;
     const el = $('tab-alerts');
     if (!conf.length && !reqs.length) {
-      el.innerHTML = `<div class="empty">No alerts${f.sector ? ' in your sector' : ''}.<br>STCA warns ${'≤'}2 min ahead; separation minima 5 NM / 1000 ft (3 NM below FL100).</div>`;
+      el.innerHTML = f.me?.sectors?.length
+        ? `<div class="empty">No alerts in your sectors.<br>STCA warns ${'≤'}2 min ahead; separation minima 5 NM / 1000 ft (3 NM below FL100).</div>`
+        : '<div class="empty">You are not controlling any sector.<br>Take one in the <b>Sectors</b> tab: its alerts and pilot requests will appear here.</div>';
       return;
     }
     el.innerHTML = conf.map(([a, b, kind, tTo, h, v]) => `
@@ -323,7 +347,7 @@ export class UI {
     this.sigs.dec = sig;
     const el = $('tab-decisions');
     if (!ds.length) {
-      el.innerHTML = `<div class="empty">Decision points appear here: conflicts to resolve and pilot requests.<br>Each option shows the outcome of a fast-time prediction. Turn on <b>AI</b> to get advice or let it act.${f.sector ? '' : '<br><br>Tip: pick a sector — with "All Europe" decisions are only built when AI is on.'}</div>`;
+      el.innerHTML = `<div class="empty">Decision points for your sectors appear here: conflicts to resolve and pilot requests.<br>Each option shows the outcome of a fast-time prediction. Turn on <b>AI</b> to get advice or let it act.${f.me?.sectors?.length ? '' : '<br><br>Take a sector in the <b>Sectors</b> tab first.'}</div>`;
       return;
     }
     el.innerHTML = ds.map((d) => {
@@ -360,7 +384,7 @@ export class UI {
 
   renderTraffic() {
     const f = this.frame;
-    const recs = this.app.store.list.filter((r) => (f.sector ? r.flags & F.SECTOR : r.flags & (F.HUMAN | F.AI)));
+    const recs = this.app.store.list.filter((r) => r.flags & F.SECTOR);
     recs.sort((a, b) => b.alt - a.alt);
     $('n-traffic').textContent = recs.length;
     const sig = JSON.stringify(recs.map((r) => [r.id, Math.round(r.alt / 100), r.cfl, r.lateral, r.flags]));
@@ -368,7 +392,7 @@ export class UI {
     this.sigs.traffic = sig;
     const el = $('tab-traffic');
     if (!recs.length) {
-      el.innerHTML = `<div class="empty">${f.sector ? 'No traffic in the sector right now.' : 'Pick a sector to see the traffic you are responsible for.<br>Aircraft you (or the AI) have cleared are listed here.'}</div>`;
+      el.innerHTML = `<div class="empty">${f.me?.sectors?.length ? 'No traffic in your sectors right now.' : 'Take a sector in the <b>Sectors</b> tab to see the traffic you are responsible for.'}</div>`;
       return;
     }
     el.innerHTML = `<table class="traffic"><thead><tr><th>CS</th><th>FL</th><th>CFL</th><th>GS</th><th>NAV</th></tr></thead><tbody>${recs.map((r) => {
@@ -376,6 +400,59 @@ export class UI {
       return `<tr data-sel="${r.id}"><td style="color:${col}">${esc(r.cs)}</td><td>${pad3(r.alt / 100)}${r.vs > 250 ? '↑' : r.vs < -250 ? '↓' : ''}</td><td>${r.cfl != null ? pad3(r.cfl) : ''}</td><td>${r.gs}</td><td>${esc(r.lateral)}</td></tr>`;
     }).join('')}</tbody></table>`;
     el.querySelectorAll('[data-sel]').forEach((x) => { x.onclick = () => this.app.select(x.dataset.sel, true); });
+  }
+
+  /** Every sector, grouped by region with its vertical layers stacked (High on top). */
+  renderSectors() {
+    const f = this.frame;
+    if (!this.catalogue || !f.sectorization) return;
+    const me = f.me?.holder;
+    const rows = new Map(f.sectorization.map(([sid, h, n]) => [sid, { h, n }]));
+    const mine = f.me?.sectors ?? [];
+    $('n-sectors').textContent = mine.length;
+    const sig = JSON.stringify([f.sectorization, me]);
+    if (sig === this.sigs.sectors) return;
+    this.sigs.sectors = sig;
+    const admin = this.me?.role === 'admin';
+    const layers = [...this.catalogue.layers].reverse();
+    const fl = (x) => (x >= 600 ? 'UNL' : pad3(x));
+    const html = this.catalogue.regions.map((reg) => `
+      <div class="region">
+        <div class="region-head" data-region="${reg.id}"><b>${esc(reg.name)}</b><span class="dim">${reg.id}</span></div>
+        ${layers.map((l) => {
+    const sid = `${reg.id}-${l.id}`;
+    const { h, n } = rows.get(sid) ?? { h: null, n: 0 };
+    const isMine = h && h === me;
+    const isAi = h?.startsWith('ai:');
+    const other = h && !isMine;
+    const btns = [];
+    if (!h) btns.push(`<button class="mini" data-sact="take" data-sid="${sid}">Take</button>`);
+    if (isMine) btns.push(`<button class="mini ghost" data-sact="release" data-sid="${sid}">Release</button>`);
+    if (!h || isMine) btns.push(`<button class="mini ai" data-sact="ai" data-sid="${sid}" title="Let the AI control this sector">AI</button>`);
+    if (isAi) btns.push(`<button class="mini" data-sact="take" data-sid="${sid}" title="Take over from the AI">Take</button>`);
+    if (other && admin && !isAi) btns.push(`<button class="mini ghost" data-sact="force" data-sid="${sid}" title="Admin: take this sector over">Take</button>`);
+    if (other && admin) btns.push(`<button class="mini ghost" data-sact="release" data-sid="${sid}" title="Admin: release this sector">Free</button>`);
+    return `<div class="layer ${isMine ? 'mine' : ''}" style="--hc:${holderColor(h, me)}">
+            <span class="lay">${l.id}</span>
+            <span class="band">FL${fl(l.fl_min)}–${fl(l.fl_max)}</span>
+            <span class="holder">${h ? esc(holderName(h, me)) : '<span class="dim">free</span>'}</span>
+            <span class="count" title="aircraft in this sector">${n}</span>
+            <span class="acts">${btns.join('')}</span>
+          </div>`;
+  }).join('')}
+      </div>`).join('');
+    const el = $('tab-sectors');
+    el.innerHTML = `<p class="hint sector-hint">Take the sectors you want to control; you can combine several.
+      Aircraft inside them are yours: only you can clear them and only you see their alerts and requests.</p>${html}`;
+    el.querySelectorAll('[data-sact]').forEach((b) => { b.onclick = () => this.sectorAction(b.dataset.sact, b.dataset.sid); });
+    el.querySelectorAll('[data-region]').forEach((x) => {
+      x.onclick = () => {
+        const reg = this.catalogue.regions.find((r) => r.id === x.dataset.region);
+        const lat = reg.poly.reduce((a, p) => a + p[0], 0) / reg.poly.length;
+        const lon = reg.poly.reduce((a, p) => a + p[1], 0) / reg.poly.length;
+        this.app.flyTo(lat, lon, 1100);
+      };
+    });
   }
 
   // ------------------------------------------------------------------ radio
@@ -453,6 +530,19 @@ export class UI {
     const ctl = ctlName ?? (rec.flags & F.HUMAN ? 'CONTROLLED' : rec.flags & F.AI ? 'AI' : rec.flags & F.SECTOR ? 'IN SECTOR' : 'UNCONTROLLED');
     $('s-ctl').textContent = ctl;
     $('s-ctl').style.color = rec.flags & F.HUMAN ? 'var(--human)' : rec.flags & F.AI ? 'var(--ai)' : 'var(--muted)';
+    // responsibility: only the holder of the aircraft's sector may clear it
+    const auth = $('s-authority');
+    const me = this.frame?.me?.holder;
+    const holder = rec.sec ? this.frame?.sectorization?.find((r) => r[0] === rec.sec)?.[1] : null;
+    const locked = !!holder && holder !== me;
+    auth.className = 'authority ' + (locked ? 'locked' : holder ? 'mine' : 'free');
+    auth.style.setProperty('--hc', holderColor(holder, me));
+    auth.innerHTML = !rec.sec ? 'Outside the sectorization · anyone may clear it'
+      : locked ? `In <b>${esc(this.sectorName(rec.sec))}</b> · controlled by <b>${esc(holderName(holder, me))}</b> · read only`
+        : holder ? `In your sector <b>${esc(this.sectorName(rec.sec))}</b>`
+          : `In <b>${esc(this.sectorName(rec.sec))}</b> · unmanned · anyone may clear it`;
+    document.querySelector('#right .ctl').classList.toggle('locked', locked);
+    document.querySelectorAll('#right .ctl button, #right .ctl input').forEach((x) => { x.disabled = locked; });
     $('s-pending').textContent = d && d.icao24 === rec.id && d.pending.length
       ? 'Pilot executing: ' + d.pending.map((p) => `${p.kind}${p.value != null ? ' ' + p.value : ''}${p.direction ? ' ' + p.direction : ''}`).join(', ') : '';
     if (fresh) {

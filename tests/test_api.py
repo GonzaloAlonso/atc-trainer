@@ -17,9 +17,10 @@ def test_api_smoke(client):
     schema = client.get("/api/schema").json()
     assert "CLIMB" in schema["clearance_kinds"]
 
-    assert len(client.get("/api/sectors").json()) >= 5
+    cat = client.get("/api/sectors").json()
+    assert len(cat["sectors"]) == 36 and {l["id"] for l in cat["layers"]} == {"L", "U", "H"}
     assert client.post("/api/command", json={"text": "NOBODY C 350"}).status_code == 400
-    assert client.post("/api/sector", json={"sector": "NOPE"}).status_code == 400
+    assert client.post("/api/sectors/NOPE/take").status_code == 404
 
     r = client.post("/api/sim", json={"action": "lockstep", "lockstep": True})
     assert r.status_code == 200 and r.json()["sim"]["lockstep"]

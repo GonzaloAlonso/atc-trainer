@@ -1,8 +1,11 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { toWorld, worldPerNm, FT } from './projection.js';
+import { holderColor } from './holders.js';
 
-// Flag bits sent by the server (see Engine._flags)
+// Flag bits. HUMAN, AI and PENDING come from the server (Engine._flags); the per-viewer ones
+// (SECTOR = in one of my sectors, STCA/LOS = my alerts, REQUEST = my pilot requests) are derived
+// here from my own, already filtered, conflicts and decisions.
 export const F = { SECTOR: 1, HUMAN: 2, AI: 4, STCA: 8, LOS: 16, REQUEST: 32, PENDING: 64 };
 
 export const PALETTE = {
@@ -20,7 +23,15 @@ export function colorKey(rec, selectedId) {
   if (f & F.HUMAN) return 'human';
   if (f & F.AI) return 'ai';
   if (f & F.SECTOR) return 'sector';
+  if (rec.holder) return 'foreign';          // in another controller's sector: their colour, dimmed
   return 'other';
+}
+
+const tintCache = new Map();
+export function tintOf(hex) {
+  let c = tintCache.get(hex);
+  if (!c) { c = new THREE.Color(hex).multiplyScalar(0.75); tintCache.set(hex, c); }
+  return c;
 }
 
 const DEG = Math.PI / 180;
@@ -69,8 +80,24 @@ export class TrafficStore {
     this.rate = frame.paused || frame.lockstep ? 0 : frame.speed;
     const seen = new Set();
     const tmp = {};
+    // per-viewer state: my sectors, my alerts, my pilot requests
+    const me = frame.me?.holder ?? null;
+    const mine = new Set(frame.me?.sectors ?? []);
+    const holders = new Map((frame.sectorization ?? []).map(([sid, h]) => [sid, h]));
+    const alert = new Map();
+    for (const [a, b, kind] of frame.conflicts ?? []) {
+      for (const i of [a, b]) if (alert.get(i) !== 'LOS') alert.set(i, kind);
+    }
+    const requests = new Set((frame.decisions ?? []).filter((d) => d.status === 'open' && d.kind !== 'conflict')
+      .flatMap((d) => d.subjects));
     for (const r of frame.ac) {
-      const [id, cs, lat, lon, alt, hdg, gs, vs, cfl, flags, cls, lateral, ahdg, dct, spd] = r;
+      const [id, cs, lat, lon, alt, hdg, gs, vs, cfl, rowFlags, cls, lateral, ahdg, dct, spd, sec, ctl] = r;
+      let flags = rowFlags & (F.HUMAN | F.AI | F.PENDING);
+      if (sec && mine.has(sec)) flags |= F.SECTOR;
+      const lvl = alert.get(id);
+      if (lvl === 'LOS') flags |= F.LOS; else if (lvl === 'STCA') flags |= F.STCA;
+      if (requests.has(id)) flags |= F.REQUEST;
+      const holder = sec ? holders.get(sec) ?? null : null;
       seen.add(id);
       let rec = this.map.get(id);
       if (!rec) {
@@ -90,7 +117,10 @@ export class TrafficStore {
         if (Math.abs(rec.cLat) > 0.2 || Math.abs(rec.cLon) > 0.2) { rec.cLat = rec.cLon = rec.cAlt = 0; }
         rec.corrAt = performance.now();
       }
-      Object.assign(rec, { cs, lat, lon, alt, hdg, gs, vs, cfl, flags, cls, lateral, ahdg, dct, spd, t: frame.t });
+      Object.assign(rec, {
+        cs, lat, lon, alt, hdg, gs, vs, cfl, flags, cls, lateral, ahdg, dct, spd, t: frame.t,
+        sec, ctl, holder: holder === me ? null : holder, tint: holder && holder !== me ? holderColor(holder, me) : null,
+      });
       if (frame.t - rec.trailT >= TRAIL_EVERY_S || frame.t < rec.trailT) {
         rec.trail.push([lat, lon, alt]);
         if (rec.trail.length > TRAIL_LEN) rec.trail.shift();
@@ -201,8 +231,8 @@ export class AircraftLayer {
       const p = store.position(r, simNow, this._p);
       const w = toWorld(p.lat, p.lon, p.alt * FT, r.world);
       r.pLat = p.lat; r.pLon = p.lon; r.pAlt = p.alt;
-      const col = COLORS[colorKey(r, selectedId)];
       r.colorKey = colorKey(r, selectedId);
+      const col = r.colorKey === 'foreign' ? tintOf(r.tint) : COLORS[r.colorKey];
 
       // model
       const dist = camPos.distanceTo(w);

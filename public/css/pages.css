@@ -213,3 +213,42 @@ dl.kv dd { margin: 0; font-family: var(--mono); font-size: 12px; word-break: bre
 .tutorial-btn .cap { font-size: 13px; line-height: 1; }
 body.training .tutorial-btn { display: none; }
 @media (max-width: 1400px) { .tutorial-btn .label { display: none; } .tutorial-btn { padding: 0 8px; } }
+
+/* ------------------------------------------------------------ sectorization (2.0) */
+.my-sectors {
+  flex: none; display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 10px; max-width: 220px;
+  background: rgba(92,200,255,0.12); border: 1px solid rgba(92,200,255,0.5); border-radius: 6px; cursor: pointer;
+  font-family: var(--mono); font-size: 12px; color: var(--accent); white-space: nowrap; overflow: hidden;
+}
+.my-sectors .chip { flex: none; width: 9px; height: 9px; border-radius: 2px; background: var(--accent); }
+.my-sectors #my-sectors-text { overflow: hidden; text-overflow: ellipsis; }
+.my-sectors.none { background: var(--panel-2); border-color: var(--border); color: var(--muted); }
+.my-sectors.none .chip { background: var(--muted); }
+.tabs button { padding-left: 2px; padding-right: 2px; font-size: 11.5px; letter-spacing: 0; white-space: nowrap; }
+.tabs b { margin-left: 3px; padding: 1px 5px; }
+.sector-hint { margin: 2px 4px 10px; line-height: 1.5; }
+.region { margin-bottom: 8px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.region-head { display: flex; justify-content: space-between; padding: 6px 10px; cursor: pointer; font-size: 12.5px; }
+.region-head:hover { background: rgba(92,200,255,0.08); }
+.layer {
+  display: grid; grid-template-columns: 14px 80px minmax(44px, 1fr) 24px auto; gap: 6px; align-items: center;
+  padding: 5px 10px; border-top: 1px solid rgba(255,255,255,0.05); font-size: 11.5px;
+  border-left: 3px solid color-mix(in srgb, var(--hc) 70%, transparent);
+}
+.layer.mine { background: rgba(92,200,255,0.1); }
+.layer .lay { font-family: var(--mono); font-weight: 700; color: var(--hc); }
+.layer .band { font-family: var(--mono); color: var(--muted); font-size: 10.5px; }
+.layer .holder { color: var(--hc); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.layer .count { font-family: var(--mono); color: var(--muted); text-align: right; }
+.layer .acts { display: flex; gap: 4px; justify-content: flex-end; }
+.layer .mini { padding: 2px 7px; }
+.authority {
+  margin-top: 8px; padding: 6px 9px; border-radius: 6px; font-size: 11.5px; line-height: 1.4;
+  border-left: 3px solid var(--hc); background: rgba(255,255,255,0.04); color: var(--muted);
+}
+.authority b { color: var(--text); font-weight: 600; }
+.authority.locked { background: color-mix(in srgb, var(--hc) 14%, transparent); color: var(--text); }
+.authority.mine { background: rgba(92,200,255,0.1); }
+#right .ctl.locked { opacity: 0.45; }
+#right .ctl.locked * { cursor: not-allowed; }
+button:disabled.icon, #speed-seg button:disabled { cursor: not-allowed; }

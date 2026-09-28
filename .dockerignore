@@ -6,3 +6,4 @@ data/
 .env
 examples/
 *.md
+docs/

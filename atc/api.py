@@ -20,6 +20,7 @@ from . import __version__, config, sectors
 from .about import about as about_info, copyright_line
 from .auth import AuthError, AuthStore, LoginThrottle
 from .clearances import KINDS, Clearance
+from .control import ControlError, display, human
 from .engine import Engine
 from .navdata import NavData
 from .recorder import Recorder
@@ -57,8 +58,13 @@ class SimControl(BaseModel):
     dt: Optional[float] = Field(None, description="Seconds to advance for action=step")
 
 
-class SectorRequest(BaseModel):
-    sector: Optional[str] = None
+class SectorTake(BaseModel):
+    force: bool = Field(False, description="Admins: take it even if another controller holds it")
+
+
+class SectorAI(BaseModel):
+    agent: str = "rules"
+    force: bool = False
 
 
 class AiRequest(BaseModel):
@@ -134,12 +140,12 @@ def create_app():
     store = Store()
     navdata = NavData()
     recorder = Recorder(store)
-    engine = Engine(store, navdata)
+    engine = Engine(store, navdata, sector_idle_s=config.SECTOR_IDLE_S)
     auth = AuthStore()
     auth.bootstrap()
     throttle = LoginThrottle()
     tutorials = TutorialManager(navdata)
-    sockets = {}            # WebSocket -> user id for training-sandbox subscribers, None for live
+    sockets = {}            # WebSocket -> (sandbox user id or None for live, viewer holder key)
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -169,7 +175,7 @@ def create_app():
             if not sockets:
                 continue
             sandboxes = tutorials.engines()
-            for ws, uid in list(sockets.items()):
+            for ws, (uid, viewer) in list(sockets.items()):
                 eng = engine if uid is None else sandboxes.get(uid)
                 if eng is None:                 # sandbox ended (stopped or reaped)
                     sockets.pop(ws, None)
@@ -178,8 +184,10 @@ def create_app():
                     except Exception:
                         pass
                     continue
-                frame = eng.frame
-                if frame is None or frame is last.get(ws):
+                if uid is None:
+                    engine.control.seen(viewer[6:])     # an open scope counts as presence
+                frame = eng.frame_for(viewer)
+                if frame is last.get(ws):
                     continue
                 last[ws] = frame
                 try:
@@ -223,6 +231,7 @@ def create_app():
             if _is_api(path):
                 return JSONResponse({"detail": "password change required"}, status_code=403)
             return RedirectResponse("/login?change=1", status_code=302)
+        engine.control.seen(user["username"])
         if (path in ADMIN_PATHS or path.startswith("/api/admin/")) and user["role"] != "admin":
             if _is_api(path):
                 return JSONResponse({"detail": "admin only"}, status_code=403)
@@ -304,6 +313,12 @@ def create_app():
                         samesite="lax", secure=_cookie_secure(request), path="/")
         return resp
 
+    def _me(request):
+        return human(request.state.user["username"])
+
+    def _is_admin(request):
+        return request.state.user["role"] == "admin"
+
     def _engine(request):
         """The caller's private training sandbox (header X-ATC-Context: tutorial) or the shared sim."""
         if request.headers.get("x-atc-context") == "tutorial":
@@ -322,7 +337,7 @@ def create_app():
             box = tutorials.start(user["id"])
         except OverflowError as exc:
             raise HTTPException(429, str(exc))
-        return {"started": box.created, "sector": "ALPS-UPPER", "user": _public_user(auth.get_user(user["id"]))}
+        return {"started": box.created, "sector": "ALP-U", "user": _public_user(auth.get_user(user["id"]))}
 
     @app.post("/api/tutorial/stop", tags=["tutorial"])
     def tutorial_stop(request: Request):
@@ -397,10 +412,10 @@ def create_app():
                 await ws.close(code=4404)
                 return
             uid, src = user["id"], box.engine
-        sockets[ws] = uid
+        viewer = human(user["username"])
+        sockets[ws] = (uid, viewer)
         try:
-            if src.frame:
-                await ws.send_text(src.frame)
+            await ws.send_text(src.frame_for(viewer))
             while True:
                 await ws.receive_text()      # client messages are ignored; use REST for actions
         except WebSocketDisconnect:
@@ -413,7 +428,7 @@ def create_app():
     def status(request: Request):
         eng = _engine(request)
         return {"version": __version__, "recording": config.RECORD,
-                "recorder": recorder.status(), "ai": eng.ai_status(),
+                "recorder": recorder.status(), "ai": eng.ai_status(request.state.user["username"]),
                 "sim": {"t": eng.t, "mode": eng.mode, "speed": eng.speed,
                         "paused": eng.paused, "lockstep": eng.lockstep,
                         "aircraft": len(eng.aircraft)},
@@ -424,21 +439,64 @@ def create_app():
         return {"fixes": [[f["ident"], f["kind"], round(f["lat"], 4), round(f["lon"], 4), f["name"]]
                           for f in navdata.fixes]}
 
-    @app.get("/api/sectors", tags=["info"])
-    def get_sectors():
-        return sectors.SECTORS
+    # ------------------------------------------------------------------ sectorization
+    @app.get("/api/sectors", tags=["sectors"])
+    def get_sectors(request: Request):
+        """Sector catalogue (regions × vertical layers) with who controls each sector now."""
+        eng = _engine(request)
+        cat = sectors.catalogue()
+        holders = eng.control.snapshot()
+        for s in cat["sectors"]:
+            h = holders.get(s["id"])
+            s["holder"], s["holder_name"] = h, display(h)
+        cat["me"] = {"holder": _me(request), "sectors": eng.control.sectors_of(_me(request))}
+        return cat
+
+    def _sector_call(fn):
+        try:
+            return fn()
+        except ControlError as exc:
+            raise HTTPException(exc.status, str(exc))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+
+    @app.post("/api/sectors/{sector_id}/take", tags=["sectors"])
+    def take_sector(sector_id: str, request: Request, req: Optional[SectorTake] = None):
+        """Take responsibility for a sector (you may hold several). Admins can force a takeover."""
+        eng = _engine(request)
+        force = bool(req and req.force and _is_admin(request))
+        mine = _sector_call(lambda: eng.take_sector(sector_id, _me(request), force))
+        return {"sectors": mine}
+
+    @app.post("/api/sectors/{sector_id}/release", tags=["sectors"])
+    def release_sector(sector_id: str, request: Request):
+        """Release your sector (admins may release anyone's)."""
+        eng = _engine(request)
+        mine = _sector_call(lambda: eng.release_sector(sector_id, _me(request), force=_is_admin(request)))
+        return {"sectors": mine}
+
+    @app.post("/api/sectors/{sector_id}/assign-ai", tags=["sectors"])
+    def assign_ai_sector(sector_id: str, request: Request, req: Optional[SectorAI] = None):
+        """Hand a free sector, or one of yours, to an AI agent that controls it autonomously."""
+        eng = _engine(request)
+        req = req or SectorAI()
+        _sector_call(lambda: eng.assign_ai(sector_id, req.agent, _me(request),
+                                           force=bool(req.force and _is_admin(request))))
+        return {"sector": sector_id, "holder": "ai:" + req.agent}
 
     # ------------------------------------------------------------------ observation
     @app.get("/api/observation", tags=["agent"])
-    def observation(request: Request, sector_only: bool = False):
-        """Complete typed state: aircraft, conflicts, open decision points, score."""
+    def observation(request: Request, mine_only: bool = False, scope: str = "mine"):
+        """Typed state: all traffic (with sector and holder), plus the conflicts and decision
+        points you are responsible for. Admins may pass scope=all to see every issue."""
         eng = _engine(request)
-        return eng.observation(sector_only)
+        viewer = None if scope == "all" and _is_admin(request) else _me(request)
+        return eng.observation(viewer, mine_only)
 
     @app.get("/api/aircraft/{ident}", tags=["agent"])
     def aircraft(ident: str, request: Request):
         eng = _engine(request)
-        d = eng.aircraft_detail(ident)
+        d = eng.aircraft_detail(ident, _me(request))
         if d is None:
             raise HTTPException(404, "no such aircraft")
         return d
@@ -446,7 +504,7 @@ def create_app():
     @app.get("/api/events", tags=["agent"])
     def events(request: Request, since: int = 0):
         eng = _engine(request)
-        return eng.events_since(since)
+        return eng.events_since(since, _me(request))
 
     # ------------------------------------------------------------------ actions
     @app.post("/api/clearance", tags=["agent"])
@@ -454,7 +512,9 @@ def create_app():
         eng = _engine(request)
         try:
             clrs = [Clearance(c.kind, c.value, c.direction) for c in req.clearances]
-            return eng.issue(req.aircraft, clrs, _issuer(request.state.user, req.issuer))
+            return eng.issue(req.aircraft, clrs, _issuer(request.state.user, req.issuer), actor=_me(request))
+        except PermissionError as exc:
+            raise HTTPException(403, str(exc))
         except ValueError as exc:
             raise HTTPException(400, str(exc))
 
@@ -463,7 +523,9 @@ def create_app():
         """ATC shorthand, e.g. `DLH4AB C 370`, `EZY12 TL 270`, `RYR1 DCT KPT`, `AFR7 RON`."""
         eng = _engine(request)
         try:
-            return eng.command(req.text, _issuer(request.state.user, req.issuer))
+            return eng.command(req.text, _issuer(request.state.user, req.issuer), actor=_me(request))
+        except PermissionError as exc:
+            raise HTTPException(403, str(exc))
         except ValueError as exc:
             raise HTTPException(400, str(exc))
 
@@ -471,27 +533,36 @@ def create_app():
     def list_decisions(request: Request, status: Optional[str] = "open"):
         eng = _engine(request)
         with eng.lock:
-            return [dp.to_dict() for dp in eng.decisions.values()
+            return [dp.to_dict() for dp in eng.visible_decisions(_me(request))
                     if status is None or dp.status == status]
 
     @app.post("/api/decisions/{dp_id}", tags=["agent"])
     def answer(dp_id: str, req: DecisionAnswer, request: Request):
         eng = _engine(request)
         try:
-            return eng.answer_decision(dp_id, req.answers, _issuer(request.state.user, req.by))
+            return eng.answer_decision(dp_id, req.answers, _issuer(request.state.user, req.by), actor=_me(request))
+        except PermissionError as exc:
+            raise HTTPException(403, str(exc))
         except ValueError as exc:
             raise HTTPException(400, str(exc))
 
     @app.post("/api/decisions/{dp_id}/dismiss", tags=["agent"])
     def dismiss(dp_id: str, request: Request):
         eng = _engine(request)
-        eng.dismiss_decision(dp_id)
+        try:
+            eng.dismiss_decision(dp_id, actor=_me(request))
+        except PermissionError as exc:
+            raise HTTPException(403, str(exc))
         return {"ok": True}
 
     # ------------------------------------------------------------------ control
     @app.post("/api/sim", tags=["control"])
     def sim(req: SimControl, request: Request):
+        """Pause, speed, scenario and lockstep. On the shared simulation these affect everyone,
+        so they are admin-only; in your tutorial sandbox they are yours."""
         eng = _engine(request)
+        if eng is engine and not _is_admin(request):
+            raise HTTPException(403, "only admins can control the shared simulation")
         try:
             if req.action == "pause":
                 eng.set_paused(True)
@@ -507,7 +578,7 @@ def create_app():
                 eng.step(max(0.1, min(600.0, req.dt or 5.0)))
                 with eng.lock:
                     eng._build_frame()
-                return eng.observation()
+                return eng.observation(_me(request))
             elif req.action == "reset":
                 if eng is not engine:
                     raise ValueError("restart the training scenario with POST /api/tutorial/start")
@@ -519,19 +590,11 @@ def create_app():
             raise HTTPException(400, str(exc))
         return status(request)
 
-    @app.post("/api/sector", tags=["control"])
-    def set_sector(req: SectorRequest, request: Request):
-        eng = _engine(request)
-        if req.sector and req.sector not in sectors.BY_ID:
-            raise HTTPException(400, "unknown sector")
-        eng.set_sector(req.sector)
-        return {"sector": req.sector}
-
     @app.post("/api/ai", tags=["control"])
     def set_ai(req: AiRequest, request: Request):
         eng = _engine(request)
         try:
-            return eng.set_ai(req.mode, req.agent)
+            return eng.set_ai(request.state.user["username"], req.mode, req.agent)
         except ValueError as exc:
             raise HTTPException(400, str(exc))
 

@@ -1,8 +1,13 @@
 """The simulation engine: time, traffic life-cycle, clearances, monitoring, decisions and scoring.
 
+Responsibility follows the sectorization (atc/sectors.py): every aircraft is in at most one
+sector, and whoever holds that sector (atc/control.py) is responsible for it. Alerts, pilot
+requests, decision points, radio messages and scores are routed to that holder; other users
+only see them if they hold one of the sectors involved.
+
 Threading: a dedicated thread advances the simulation in real time. Every public method takes
-`self.lock`, so the API layer can call them from any thread. After each tick a serialized frame
-is published in `self.frame` for the WebSocket broadcaster.
+`self.lock`, so the API layer can call them from any thread. After each tick the shared part of
+the frame is serialized once; `frame_for(viewer)` adds the viewer-specific part.
 """
 
 import collections
@@ -18,6 +23,7 @@ from concurrent.futures import ThreadPoolExecutor
 from . import agents, config, conflicts, decisions, sectors
 from .aircraft import Aircraft
 from .clearances import Clearance, parse_command, readback
+from .control import Control, ControlError, display
 from .scenario import PlanLoader
 
 log = logging.getLogger("visor.engine")
@@ -27,6 +33,9 @@ IGNORE_BELOW_FT = 4000.0       # aerodrome traffic is not monitored (tower/appro
 MARGIN_DEG = 0.5
 MAX_NEW_DECISIONS = 2
 MAX_OPEN_DECISIONS = 12
+
+# Aircraft row flag bits shared by every viewer (per-viewer flags are derived client-side)
+F_HUMAN, F_AI, F_PENDING = 2, 4, 64
 
 
 def _fl(alt):
@@ -38,7 +47,7 @@ def _sentence(text):
 
 
 class Engine:
-    def __init__(self, store, navdata):
+    def __init__(self, store, navdata, sector_idle_s=None):
         self.store = store
         self.navdata = navdata
         self.lock = threading.RLock()
@@ -46,13 +55,15 @@ class Engine:
         self.speed = 1.0
         self.paused = False
         self.lockstep = False
-        self.sector = None
-        self.ai_mode = "off"
-        self.agent = agents.create("rules")
+        self.control = Control(idle_s=sector_idle_s)
+        self.ai_prefs = {}             # username -> {"mode", "agent"} for that user's own sectors
+        self._agents = {}
         self._agent_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="agent")
-        self.frame = None
+        self._frame_cache = {}
         self.frame_seq = 0
+        self._shared = "{}"
         self._running = False
+        self._last_reap = 0.0
         self.reset("live")
 
     # ------------------------------------------------------------------ scenario control
@@ -89,10 +100,9 @@ class Engine:
             self.decisions = {}
             self._decision_by_key = {}
             self._cooldown = {}
-            self.events = collections.deque(maxlen=800)
+            self.events = collections.deque(maxlen=1500)
             self.event_seq = 0
-            self.score = collections.Counter()
-            self._in_sector = set()
+            self.scores = collections.defaultdict(collections.Counter)   # holder -> counters
             self._los_ids = set()
             self._last_conflict_scan = -1e9
             self._last_decision_scan = -1e9
@@ -114,32 +124,87 @@ class Engine:
         with self.lock:
             self.lockstep = bool(on)
 
-    def set_sector(self, sector_id):
+    # ------------------------------------------------------------------ sectors & holders
+    def holder_of(self, ac):
+        return self.control.holder(ac.sector_id)
+
+    def take_sector(self, sector_id, holder, force=False):
         with self.lock:
-            self.sector = sectors.BY_ID.get(sector_id) if sector_id else None
-            self._in_sector = set()
-            self._update_sector()
-            self._scan_conflicts()
-            self._event("system", "Sector %s" % (self.sector["name"] if self.sector else "none (all Europe)"))
+            prev = self.control.take(sector_id, holder, force)
+            if prev != holder:
+                name = sectors.BY_ID[sector_id]["name"]
+                taken = " from %s" % display(prev) if prev else ""
+                self._event("system", "%s takes %s%s" % (display(holder), name, taken), sectors=[sector_id])
+                self._reassign_open_decisions()
+            self._build_frame()
+            return self.control.sectors_of(holder)
+
+    def release_sector(self, sector_id, holder, force=False):
+        with self.lock:
+            prev = self.control.release(sector_id, holder, force)
+            if prev:
+                self._event("system", "%s released by %s" % (sectors.BY_ID[sector_id]["name"], display(holder)),
+                            sectors=[sector_id])
+                self._reassign_open_decisions()
+            self._build_frame()
+            return self.control.sectors_of(holder)
+
+    def assign_ai(self, sector_id, agent_name, by_holder, force=False):
+        with self.lock:
+            agents.create(agent_name)                 # validates the name
+            self.control.assign_ai(sector_id, agent_name, by_holder, force)
+            self._event("system", "%s handed to AI (%s) by %s" % (
+                sectors.BY_ID[sector_id]["name"], agent_name, display(by_holder)), sectors=[sector_id])
+            self._reassign_open_decisions()
             self._build_frame()
 
-    def set_ai(self, mode=None, agent=None):
+    def _reassign_open_decisions(self):
+        """Holders changed: re-route open decision points and let the new holder's AI answer."""
+        for dp in self.decisions.values():
+            if dp.status == "open":
+                dp.holders = self._holders_for(dp.sector_ids)
+                dp.suggestion = None
+
+    def _holders_for(self, sector_ids):
+        return sorted({h for h in (self.control.holder(s) for s in sector_ids) if h})
+
+    def _reap_idle(self):
+        for sid, h in self.control.reap_idle():
+            self._event("system", "%s released: %s went offline" % (sectors.BY_ID[sid]["name"], display(h)),
+                        sectors=[sid])
+            self._reassign_open_decisions()
+
+    # ------------------------------------------------------------------ AI preferences
+    def agent(self, name):
+        if name not in self._agents:
+            self._agents[name] = agents.create(name)
+        return self._agents[name]
+
+    def ai_pref(self, username):
+        return self.ai_prefs.get(username, {"mode": "off", "agent": "rules"})
+
+    def set_ai(self, username, mode=None, agent=None):
+        """The user's own AI assistance for decision points in their sectors."""
         with self.lock:
-            if agent and agent != self.agent.name:
-                self.agent = agents.create(agent)
+            pref = dict(self.ai_pref(username))
+            if agent:
+                self.agent(agent)                     # validates
+                pref["agent"] = agent
             if mode:
                 if mode not in AI_MODES:
                     raise ValueError("mode must be one of %s" % (AI_MODES,))
-                self.ai_mode = mode
-                for dp in self.decisions.values():
+                pref["mode"] = mode
+            self.ai_prefs[username] = pref
+            for dp in self.decisions.values():
+                if "human:" + username in dp.holders:
                     dp.suggestion = None
                     dp.pending_agent = False
-            self._event("system", "AI %s (%s)" % (self.ai_mode, self.agent.name))
             self._build_frame()
-            return self.ai_status()
+            return self.ai_status(username)
 
-    def ai_status(self):
-        return {"mode": self.ai_mode, "agent": self.agent.status(),
+    def ai_status(self, username=None):
+        pref = self.ai_pref(username) if username else {"mode": "off", "agent": "rules"}
+        return {"mode": pref["mode"], "agent": self.agent(pref["agent"]).status(),
                 "available_agents": sorted(agents.REGISTRY)}
 
     # ------------------------------------------------------------------ run loop
@@ -160,6 +225,9 @@ class Engine:
                         dt = min(dt, max(0.0, time.time() - self.t))   # never run into the future
                         if dt > 0:
                             self.step(dt)
+                    if t0 - self._last_reap > 15:
+                        self._last_reap = t0
+                        self._reap_idle()
                     self._build_frame()
             except Exception:
                 log.exception("simulation tick failed")
@@ -184,7 +252,7 @@ class Engine:
                 self._scan_conflicts()
             if self.t - self._last_decision_scan >= config.DECISION_PERIOD_S:
                 self._last_decision_scan = self.t
-                self._update_sector()
+                self._update_sectors()
                 self._pilot_requests()
                 self._update_decisions()
 
@@ -206,6 +274,7 @@ class Engine:
             ac = Aircraft(plan, t, random.Random(self.rng.random()))
             if not self._in_area(ac):
                 continue
+            ac.sector_id = sectors.sector_at(ac.lat, ac.lon, ac.alt)
             self.aircraft[icao] = ac
 
     def _in_area(self, ac):
@@ -231,17 +300,16 @@ class Engine:
                         reason = "left radar coverage"
                 elif plan.terminated_at is None and t > last_t + 2.5 * interval + 60:
                     reason = "no recent data"
-            elif plan.terminated_at is not None and t > last_t + 1800 and ac.id not in self._in_sector:
+            elif plan.terminated_at is not None and t > last_t + 1800 and self.holder_of(ac) is None:
                 reason = "transferred"
             if reason:
                 gone.append((ac, reason))
         for ac, reason in gone:
             del self.aircraft[ac.id]
-            plan = ac.plan
-            plan.done = True
-            if ac.id in self._in_sector:
-                self._in_sector.discard(ac.id)
-                self._event("system", "%s %s" % (ac.callsign, reason), callsign=ac.callsign)
+            ac.plan.done = True
+            if self.holder_of(ac):
+                self._event("system", "%s %s" % (ac.callsign, reason), callsign=ac.callsign,
+                            sectors=[ac.sector_id])
             for dp in self.decisions.values():
                 if dp.status == "open" and ac.id in dp.subject_ids:
                     self._close(dp, "expired")
@@ -253,35 +321,32 @@ class Engine:
                 if abs(o.lat - ac.lat) < lat_band and abs(o.lon - ac.lon) < lon_band
                 and abs(o.alt - ac.alt) < v_ft]
 
-    # ------------------------------------------------------------------ sector & requests
-    def _relevant(self, ac):
-        return ac.id in self._in_sector if self.sector else True
-
-    def _update_sector(self):
-        if not self.sector:
-            self._in_sector = set()
-            return
-        now_in = {ac.id for ac in self.aircraft.values()
-                  if sectors.contains(self.sector, ac.lat, ac.lon, ac.alt)}
-        for i in now_in - self._in_sector:
-            ac = self.aircraft[i]
-            self._event("radio", "%s, %s, flight level %03d" % (
-                self.sector["name"], ac.callsign, int(round(ac.alt / 1000.0)) * 10),
-                speaker="PILOT", callsign=ac.callsign)
-        for i in self._in_sector - now_in:
-            if i in self.aircraft:
-                if i not in self._los_ids:
-                    self.score["handled"] += 1
-                self._event("system", "%s left the sector" % self.aircraft[i].callsign,
-                            callsign=self.aircraft[i].callsign)
-        self._in_sector = now_in
+    # ------------------------------------------------------------------ sectors & requests
+    def _update_sectors(self):
+        """Recompute each aircraft's sector: check-ins, hand-offs and 'handled' credits."""
+        for ac in self.aircraft.values():
+            sid = sectors.sector_at(ac.lat, ac.lon, ac.alt)
+            prev = getattr(ac, "sector_id", None)
+            if sid == prev:
+                continue
+            ac.sector_id = sid
+            old_holder = self.control.holder(prev)
+            if old_holder:
+                if ac.id not in self._los_ids:
+                    self.scores[old_holder]["handled"] += 1
+                self._event("system", "%s left %s" % (ac.callsign, sectors.BY_ID[prev]["name"]),
+                            callsign=ac.callsign, sectors=[prev])
+            if self.control.holder(sid):
+                self._event("radio", "%s, %s, flight level %03d" % (
+                    sectors.BY_ID[sid]["name"], ac.callsign, int(round(ac.alt / 1000.0)) * 10),
+                    speaker="PILOT", callsign=ac.callsign, sectors=[sid])
 
     def _pilot_requests(self):
         t = self.t
         open_req = {sid for dp in self.decisions.values()
                     if dp.status == "open" and dp.kind != "conflict" for sid in dp.subject_ids}
         for ac in list(self.aircraft.values()):
-            if ac.controller is None or ac.id in open_req or not self._relevant(ac):
+            if ac.controller is None or ac.id in open_req or not self.holder_of(ac):
                 continue
             if t - getattr(ac, "last_request_t", -1e9) < 300 or t - (ac.last_clearance_t or t) < 90:
                 continue
@@ -293,23 +358,25 @@ class Engine:
                         continue
                     ac.last_request_t = t
                     dp = decisions.level_request_decision(self, ac, fl, t)
-                    self._add_decision(dp, ("req", ac.id))
+                    self._add_decision(dp, ("req", ac.id), [ac.sector_id])
                     self._event("radio", "%s, request %s flight level %03d" % (
                         ac.callsign, "climb" if fl * 100 > ac.alt else "descent", fl),
-                        speaker="PILOT", callsign=ac.callsign)
+                        speaker="PILOT", callsign=ac.callsign, sectors=[ac.sector_id])
                     continue
             if ac.lat_mode == "HDG" and ac.hdg_since is not None and t - ac.hdg_since > 420:
                 ac.last_request_t = t
                 dp = decisions.route_request_decision(self, ac, t)
-                self._add_decision(dp, ("route", ac.id))
+                self._add_decision(dp, ("route", ac.id), [ac.sector_id])
                 self._event("radio", "%s, request to resume own navigation" % ac.callsign,
-                            speaker="PILOT", callsign=ac.callsign)
+                            speaker="PILOT", callsign=ac.callsign, sectors=[ac.sector_id])
 
     # ------------------------------------------------------------------ monitoring
     def _scan_conflicts(self):
-        """Detect conflicts. Alerts and penalties use hysteresis so a flickering prediction is
-        counted once, and a loss of separation only costs points if the controller had a warning
-        (>= 45 s of STCA) or one of the aircraft was under control."""
+        """Detect conflicts and route them to the holders of the sectors involved.
+
+        Alerts and penalties use hysteresis so a flickering prediction is counted once, and a loss
+        of separation only costs points if the controller had a warning (>= 45 s of STCA) or one
+        of the aircraft was under control."""
         t = self.t
         self._last_conflict_scan = t
         monitored = [a for a in self.aircraft.values() if a.alt >= IGNORE_BELOW_FT]
@@ -320,28 +387,30 @@ class Engine:
             key = (c["a"], c["b"])
             keys[key] = c
             a, b = self.aircraft[c["a"]], self.aircraft[c["b"]]
-            relevant = self._relevant(a) or self._relevant(b)
-            c["relevant"] = relevant
+            c["sectors"] = sorted({s for s in (a.sector_id, b.sector_id) if s})
+            c["holders"] = self._holders_for(c["sectors"])
             rec = seen.get(key)
             if rec is None:
                 rec = seen[key] = {"first": t, "last": t, "stca": False, "los": False}
             rec["last"] = t
-            if not relevant:
-                continue
+            if not c["holders"]:
+                continue                                  # unmanned airspace: nobody to alert
             if c["kind"] == "LOS" and not rec["los"]:
                 rec["los"] = True
                 warned = t - rec["first"] >= 45 or a.controller or b.controller
                 if warned:
-                    self.score["los"] += 1
+                    for h in c["holders"]:
+                        self.scores[h]["los"] += 1
                     self._los_ids.update(key)
                 self._event("alert", "SEPARATION LOST %s / %s — %.1f NM %d ft%s" % (
                     a.callsign, b.callsign, c["h_nm"], c["v_ft"], "" if warned else " (no warning, not scored)"),
-                    level="alert")
+                    level="alert", sectors=c["sectors"])
             elif c["kind"] == "STCA" and not rec["stca"]:
                 rec["stca"] = True
-                self.score["stca"] += 1
+                for h in c["holders"]:
+                    self.scores[h]["stca"] += 1
                 self._event("alert", "STCA %s / %s in %ds" % (a.callsign, b.callsign, c["t_to"]),
-                            level="warning")
+                            level="warning", sectors=c["sectors"])
         for key in [k for k, r in seen.items() if t - r["last"] > 120]:
             del seen[key]
         self.conflicts = found
@@ -353,10 +422,16 @@ class Engine:
         if by is not None:
             dp.answered_by = by
 
-    def _add_decision(self, dp, key):
+    def _add_decision(self, dp, key, sector_ids):
         dp.key = key
+        dp.sector_ids = sorted({s for s in sector_ids if s})
+        dp.holders = self._holders_for(dp.sector_ids)
         self.decisions[dp.id] = dp
         self._decision_by_key[key] = dp.id
+
+    def _credit(self, dp, counter):
+        for h in dp.holders:
+            self.scores[h][counter] += 1
 
     def _update_decisions(self):
         t = self.t
@@ -364,23 +439,16 @@ class Engine:
         n_open = sum(1 for d in self.decisions.values() if d.status == "open")
         for c in sorted(self.conflicts, key=lambda c: c["t_to"]):
             key = ("conf", c["a"], c["b"])
-            if key in self._decision_by_key:
+            if key in self._decision_by_key or not c.get("holders"):
                 continue
             if n_open + created >= MAX_OPEN_DECISIONS:
                 break
             a, b = self.aircraft.get(c["a"]), self.aircraft.get(c["b"])
-            if a is None or b is None or not (self._relevant(a) or self._relevant(b)):
-                continue
-            # Without a sector the whole of Europe is "relevant": only build decision points
-            # when an AI is working or when the controller already handles one of the aircraft.
-            if (not self.sector and self.ai_mode == "off" and a is not None and b is not None
-                    and a.controller is None and b.controller is None):
+            if a is None or b is None:
                 continue
             if self._cooldown.get(key, -1e9) > t or created >= MAX_NEW_DECISIONS:
                 continue
-            if a is None or b is None:
-                continue
-            self._add_decision(decisions.conflict_decision(self, a, b, c, t), key)
+            self._add_decision(decisions.conflict_decision(self, a, b, c, t), key, c["sectors"])
             created += 1
 
         refreshed = 0
@@ -396,6 +464,8 @@ class Engine:
                         c = self._conflict_keys[(dp.key[1], dp.key[2])]
                         fresh = decisions.conflict_decision(self, subj[0], subj[1], c, t)
                         dp.state, dp.options, dp.updated_t = fresh.state, fresh.options, t
+                        dp.sector_ids = c["sectors"]
+                        dp.holders = self._holders_for(dp.sector_ids)
                         dp.suggestion = None
                         refreshed += 1
                 elif dp.kind == "level_request":
@@ -403,20 +473,20 @@ class Engine:
                     assigned = ac.assigned.get("alt")
                     if assigned is not None and abs(assigned - dp.requested_fl * 100) < 1100:
                         self._close(dp, "executed", ac.controller)
-                        self.score["requests_granted"] += 1
+                        self._credit(dp, "requests_granted")
                     elif t - dp.created_t > 300:
                         self._close(dp, "expired")
-                        self.score["requests_expired"] += 1
+                        self._credit(dp, "requests_expired")
                         self._event("radio", "%s, still waiting for level change" % ac.callsign,
-                                    speaker="PILOT", callsign=ac.callsign)
+                                    speaker="PILOT", callsign=ac.callsign, sectors=dp.sector_ids)
                 elif dp.kind == "route_request":
                     ac = subj[0]
                     if ac.lat_mode != "HDG":
                         self._close(dp, "executed", ac.controller)
-                        self.score["requests_granted"] += 1
+                        self._credit(dp, "requests_granted")
                     elif t - dp.created_t > 300:
                         self._close(dp, "expired")
-                        self.score["requests_expired"] += 1
+                        self._credit(dp, "requests_expired")
             if dp.status != "open" and t - dp.updated_t > 120:
                 self.decisions.pop(dp.id, None)
                 if self._decision_by_key.get(dp.key) == dp.id:
@@ -424,13 +494,28 @@ class Engine:
             elif dp.status != "open" and self._decision_by_key.get(dp.key) == dp.id:
                 del self._decision_by_key[dp.key]
 
-        if self.ai_mode != "off":
-            for dp in self.decisions.values():
-                if dp.status == "open" and dp.suggestion is None and not dp.pending_agent:
-                    dp.pending_agent = True
-                    self._agent_pool.submit(self._ask_agent, dp.id, dp.to_dict(), self.agent)
+        for dp in self.decisions.values():
+            if dp.status != "open" or dp.suggestion is not None or dp.pending_agent:
+                continue
+            route = self._ai_route(dp)
+            if route:
+                agent, mode = route
+                dp.pending_agent = True
+                self._agent_pool.submit(self._ask_agent, dp.id, dp.to_dict(), agent, mode)
 
-    def _ask_agent(self, dp_id, payload, agent):
+    def _ai_route(self, dp):
+        """Which agent answers a decision point, and how: an AI holding one of its sectors acts
+        autonomously; otherwise the human holder's own AI preference applies."""
+        for h in dp.holders:
+            if h.startswith("ai:"):
+                return self.agent(h[3:]), "autonomous"
+        for h in dp.holders:
+            pref = self.ai_pref(h[6:])
+            if pref["mode"] != "off":
+                return self.agent(pref["agent"]), pref["mode"]
+        return None
+
+    def _ask_agent(self, dp_id, payload, agent, mode):
         try:
             answer = agent.decide(payload)
         except Exception as exc:
@@ -441,9 +526,10 @@ class Engine:
             if dp is None:
                 return
             dp.pending_agent = False
-            if answer is None or dp.status != "open" or self.ai_mode == "off":
+            route = self._ai_route(dp)
+            if answer is None or dp.status != "open" or route is None or route[0] is not agent:
                 return
-            if self.ai_mode == "autonomous":
+            if route[1] == "autonomous":
                 try:
                     self.answer_decision(dp_id, answer, "ai:" + agent.name)
                 except ValueError as exc:
@@ -451,12 +537,18 @@ class Engine:
             else:
                 dp.suggestion = dict(answer, agent=agent.name)
 
-    def answer_decision(self, dp_id, answer, by):
-        """Execute the option chosen in answer["action"]."""
+    def answer_decision(self, dp_id, answer, by, actor=None):
+        """Execute the option chosen in answer["action"].
+
+        actor: holder key of the user answering (API calls). They must be responsible for the
+        decision point. None for the engine's own AI, which only answers what is routed to it.
+        """
         with self.lock:
             dp = self.decisions.get(dp_id)
             if dp is None:
                 raise ValueError("unknown decision %s" % dp_id)
+            if actor is not None and dp.holders and actor not in dp.holders:
+                raise PermissionError("%s belongs to %s" % (dp.id, ", ".join(display(h) for h in dp.holders)))
             if dp.status != "open":
                 raise ValueError("decision %s is %s" % (dp_id, dp.status))
             opt = next((o for o in dp.options if o["id"] == answer.get("action")), None)
@@ -466,30 +558,30 @@ class Engine:
             for ac_id, clr in opt["clearances"]:
                 ac = self.aircraft.get(ac_id)
                 if ac is not None:
-                    results.append(self._issue(ac, [Clearance(clr.kind, clr.value, clr.direction)], by))
+                    results.append(self._issue(ac, [Clearance(clr.kind, clr.value, clr.direction)], by, actor))
             dp.status, dp.answer, dp.answered_by, dp.updated_t = "executed", answer, by, self.t
             if by.startswith("ai:"):
-                self.score["decisions_ai"] += 1
+                self._credit(dp, "decisions_ai")
                 self._event("ai", "%s → %s (confidence %s)" % (
-                    dp.id, opt["label"], answer.get("confidence", "?")), speaker="AI")
+                    dp.id, opt["label"], answer.get("confidence", "?")), speaker="AI", sectors=dp.sector_ids)
             if dp.kind == "conflict":
                 self._cooldown[dp.key] = self.t + 90
-            elif dp.kind == "level_request" and opt["clearances"]:
-                self.score["requests_granted"] += 1
-            elif dp.kind == "route_request" and opt["clearances"]:
-                self.score["requests_granted"] += 1
+            elif dp.kind in ("level_request", "route_request") and opt["clearances"]:
+                self._credit(dp, "requests_granted")
             if dp.kind != "conflict" and not opt["clearances"]:
                 ac = self.aircraft.get(dp.subject_ids[0])
                 if ac is not None:
                     self._event("radio", "%s, unable, maintain present clearance" % ac.callsign,
-                                speaker="ATC", callsign=ac.callsign, issuer=by)
+                                speaker="ATC", callsign=ac.callsign, issuer=by, sectors=dp.sector_ids)
             self._build_frame()
             return {"decision": dp.id, "option": opt["label"], "results": results}
 
-    def dismiss_decision(self, dp_id):
+    def dismiss_decision(self, dp_id, actor=None):
         with self.lock:
             dp = self.decisions.get(dp_id)
             if dp and dp.status == "open":
+                if actor is not None and dp.holders and actor not in dp.holders:
+                    raise PermissionError("%s belongs to %s" % (dp.id, ", ".join(display(h) for h in dp.holders)))
                 dp.status, dp.updated_t = "dismissed", self.t
                 if dp.kind == "conflict":
                     self._cooldown[dp.key] = self.t + 120
@@ -502,7 +594,7 @@ class Engine:
             return ac
         return next((a for a in self.aircraft.values() if a.callsign.upper() == ident), None)
 
-    def _issue(self, ac, clearances, issuer):
+    def _issue(self, ac, clearances, issuer, actor=None):
         accepted, replies = [], []
         for clr in clearances:
             if clr.kind == "LEVEL":
@@ -512,101 +604,147 @@ class Engine:
                 accepted.append(clr)
             else:
                 replies.append(reply)
+        tag = [ac.sector_id] if ac.sector_id else []
         if accepted:
             self._event("radio", "%s, %s" % (ac.callsign, ", ".join(c.phrase() for c in accepted)),
-                        speaker="ATC", callsign=ac.callsign, issuer=issuer)
+                        speaker="ATC", callsign=ac.callsign, issuer=issuer, by=actor, sectors=tag)
             self._event("radio", _sentence(readback(ac.callsign, accepted)),
-                        speaker="PILOT", callsign=ac.callsign)
-            self.score["clearances_ai" if issuer.startswith("ai:") else "clearances_human"] += len(accepted)
+                        speaker="PILOT", callsign=ac.callsign, to=issuer, by=actor, sectors=tag)
+            self.scores[issuer]["clearances"] += len(accepted)
         for r in replies:
-            self._event("radio", _sentence(r), speaker="PILOT", callsign=ac.callsign)
+            self._event("radio", _sentence(r), speaker="PILOT", callsign=ac.callsign, to=issuer, by=actor,
+                        sectors=tag)
         return {"aircraft": ac.id, "callsign": ac.callsign,
                 "accepted": [c.to_dict() for c in accepted], "rejected": replies}
 
-    def issue(self, ident, clearances, issuer="human"):
+    def check_authority(self, ac, actor):
+        """Only the holder of the aircraft's sector may instruct it; unmanned airspace is open."""
+        h = self.holder_of(ac)
+        if actor is not None and h is not None and h != actor:
+            raise PermissionError("%s is in %s, controlled by %s" % (
+                ac.callsign, sectors.BY_ID[ac.sector_id]["name"], display(h)))
+
+    def issue(self, ident, clearances, issuer="human", actor=None):
         with self.lock:
             ac = self.find(ident)
             if ac is None:
                 raise ValueError("no aircraft %s" % ident)
+            self.check_authority(ac, actor)
             for c in clearances:
                 if c.kind != "LEVEL":
                     c.validate()
-            res = self._issue(ac, clearances, issuer)
+            res = self._issue(ac, clearances, issuer, actor)
             self._build_frame()
             return res
 
-    def command(self, text, issuer="human"):
+    def command(self, text, issuer="human", actor=None):
         callsign, clearances = parse_command(text)
-        return self.issue(callsign, clearances, issuer)
+        return self.issue(callsign, clearances, issuer, actor)
 
-    # ------------------------------------------------------------------ events & output
-    def _event(self, kind, text, speaker="SYSTEM", callsign=None, issuer=None, level=None):
+    # ------------------------------------------------------------------ events & visibility
+    def _event(self, kind, text, speaker="SYSTEM", callsign=None, issuer=None, level=None,
+               sectors=None, to=None, by=None):
+        """by: account (holder key) that caused the event, e.g. the user behind an external agent."""
         self.event_seq += 1
         self.events.append({"seq": self.event_seq, "t": round(self.t, 1), "kind": kind,
-                            "speaker": speaker, "callsign": callsign, "issuer": issuer,
-                            "level": level, "text": text})
+                            "speaker": speaker, "callsign": callsign, "issuer": issuer, "to": to, "by": by,
+                            "level": level, "text": text, "sectors": [s for s in (sectors or []) if s]})
 
-    def events_since(self, seq):
+    @staticmethod
+    def _visible_event(e, viewer, mine):
+        if viewer is None:
+            return True
+        if viewer in (e["issuer"], e["to"], e["by"]):
+            return True
+        if not e["sectors"]:
+            return e["kind"] == "system"                 # global system messages
+        return any(s in mine for s in e["sectors"])
+
+    def events_since(self, seq, viewer=None):
+        """Events after seq that the viewer (holder key; None = everything) may see."""
         with self.lock:
-            return [e for e in self.events if e["seq"] > seq]
+            mine = set(self.control.sectors_of(viewer)) if viewer else set()
+            return [e for e in self.events if e["seq"] > seq and self._visible_event(e, viewer, mine)]
 
-    def points(self):
-        s = self.score
-        return (2 * s["handled"] + 10 * s["requests_granted"] - 50 * s["los"]
-                - 2 * s["stca"] - 10 * s["requests_expired"])
+    def visible_conflicts(self, viewer):
+        return [c for c in self.conflicts if viewer is None or viewer in c.get("holders", ())]
 
-    def _flags(self, ac, conf):
+    def visible_decisions(self, viewer, open_only=False):
+        return [dp for dp in self.decisions.values()
+                if (viewer is None or viewer in dp.holders) and (not open_only or dp.status == "open")]
+
+    SCORE_KEYS = ("handled", "requests_granted", "requests_expired", "los", "stca", "clearances", "decisions_ai")
+
+    def score_of(self, holder):
+        s = self.scores.get(holder, collections.Counter())
+        out = {k: s[k] for k in self.SCORE_KEYS}
+        out["points"] = (2 * s["handled"] + 10 * s["requests_granted"] - 50 * s["los"]
+                         - 2 * s["stca"] - 10 * s["requests_expired"])
+        return out
+
+    # ------------------------------------------------------------------ frames
+    def _flags(self, ac):
         f = 0
-        if ac.id in self._in_sector:
-            f |= 1
         if ac.controller and ac.controller.startswith("human"):
-            f |= 2
+            f |= F_HUMAN
         elif ac.controller and ac.controller.startswith("ai:"):
-            f |= 4
-        lvl = conf.get(ac.id)
-        if lvl == "STCA":
-            f |= 8
-        elif lvl == "LOS":
-            f |= 16
+            f |= F_AI
         if ac.pending:
-            f |= 64
+            f |= F_PENDING
         return f
 
     def _build_frame(self):
-        conf = {}
-        for c in self.conflicts:
-            for i in (c["a"], c["b"]):
-                if conf.get(i) != "LOS":
-                    conf[i] = c["kind"]
-        req_ids = {sid for dp in self.decisions.values()
-                   if dp.status == "open" and dp.kind != "conflict" for sid in dp.subject_ids}
+        """Serialize the part of the frame every viewer shares (aircraft, sectorization)."""
+        counts = collections.Counter(ac.sector_id for ac in self.aircraft.values() if ac.sector_id)
         ac_rows = []
         for ac in self.aircraft.values():
-            flags = self._flags(ac, conf) | (32 if ac.id in req_ids else 0)
             a = ac.assigned
             ac_rows.append([
                 ac.id, ac.callsign, round(ac.lat, 5), round(ac.lon, 5), round(ac.alt), round(ac.hdg, 1),
                 round(ac.tas), round(ac.vs), _fl(a["alt"]) if a["alt"] is not None else None,
-                flags, ac.cls, ac.lateral_text(), a["hdg"], a["dct"], a["spd"],
+                self._flags(ac), ac.cls, ac.lateral_text(), a["hdg"], a["dct"], a["spd"],
+                ac.sector_id, ac.controller,
             ])
+        holders = self.control.snapshot()
         first, last, nsnap = self.store.coverage()
-        frame = {
+        shared = {
             "type": "frame", "seq": self.frame_seq + 1, "t": self.t, "mode": self.mode,
             "speed": self.speed, "paused": self.paused, "lockstep": self.lockstep,
-            "sector": self.sector["id"] if self.sector else None,
-            "ai": {"mode": self.ai_mode, "agent": self.agent.name},
-            "score": dict(self.score, points=self.points()),
             "coverage": {"first": first, "last": last, "snapshots": nsnap},
             "ac": ac_rows,
-            "conflicts": [[c["a"], c["b"], c["kind"], c["t_to"], c["h_nm"], c["v_ft"], c.get("relevant", False)]
-                          for c in self.conflicts],
-            "decisions": [dp.to_dict() for dp in self.decisions.values()],
+            "sectorization": [[sid, holders.get(sid), counts.get(sid, 0)] for sid in sectors.BY_ID],
+            "points": {h: self.score_of(h)["points"] for h in set(holders.values())},
             "event_seq": self.event_seq,
         }
         self.frame_seq += 1
-        self.frame = json.dumps(frame, separators=(",", ":"))
+        self._shared = json.dumps(shared, separators=(",", ":"))
+        self._frame_cache = {}
 
-    def aircraft_detail(self, ident):
+    def frame_for(self, viewer):
+        """Complete JSON frame for a viewer (holder key, e.g. "human:alice"; None = everything)."""
+        with self.lock:
+            cached = self._frame_cache.get(viewer)
+            if cached is not None:
+                return cached
+            username = viewer[6:] if viewer and viewer.startswith("human:") else None
+            personal = {
+                "me": {"holder": viewer, "sectors": self.control.sectors_of(viewer) if viewer else []},
+                "ai": {"mode": self.ai_pref(username)["mode"], "agent": self.ai_pref(username)["agent"]},
+                "score": self.score_of(viewer) if viewer else {},
+                "conflicts": [[c["a"], c["b"], c["kind"], c["t_to"], c["h_nm"], c["v_ft"], c.get("sectors", [])]
+                              for c in self.visible_conflicts(viewer)],
+                "decisions": [dp.to_dict() for dp in self.visible_decisions(viewer)],
+            }
+            frame = self._shared[:-1] + "," + json.dumps(personal, separators=(",", ":"))[1:]
+            self._frame_cache[viewer] = frame
+            return frame
+
+    @property
+    def frame(self):
+        return self.frame_for(None)
+
+    # ------------------------------------------------------------------ agent views
+    def aircraft_detail(self, ident, viewer=None):
         with self.lock:
             ac = self.find(ident)
             if ac is None:
@@ -616,6 +754,7 @@ class Engine:
                 route = pts[ac.route_idx:]
             else:
                 route = pts[bisect_right(ac.plan.times, self.t):]
+            holder = self.holder_of(ac)
             return {
                 **decisions.ac_state(ac),
                 "icao24": ac.id, "country": ac.plan.country, "squawk": ac.plan.squawk,
@@ -623,7 +762,11 @@ class Engine:
                 "ias_kt": round(ac.ias), "modes": {"lateral": ac.lat_mode, "vertical": ac.vert_mode,
                                                    "speed": ac.spd_mode},
                 "assigned": ac.assigned, "diverged": ac.diverged,
-                "in_sector": ac.id in self._in_sector,
+                "sector": ac.sector_id,
+                "sector_name": sectors.BY_ID[ac.sector_id]["name"] if ac.sector_id else None,
+                "holder": holder, "holder_name": display(holder),
+                "mine": viewer is not None and holder == viewer,
+                "can_clear": holder is None or viewer is None or holder == viewer,
                 "pending": [{"at": round(t_, 1), **c.to_dict()} if c.kind != "DIRECT"
                             else {"at": round(t_, 1), "kind": "DIRECT", "value": c.value["ident"]}
                             for t_, c in ac.pending],
@@ -631,27 +774,31 @@ class Engine:
                 "fixes": self.navdata.nearby(ac.lat, ac.lon, 250, limit=30),
             }
 
-    def observation(self, sector_only=False):
-        """Full typed state for external agents."""
+    def observation(self, viewer=None, mine_only=False):
+        """Typed state for agents: all traffic (with sector and holder), plus the conflicts and
+        decision points the viewer is responsible for (everything when viewer is None)."""
         with self.lock:
-            conf = {}
-            for c in self.conflicts:
-                for i in (c["a"], c["b"]):
-                    conf.setdefault(i, []).append(c)
             acs = []
             for ac in self.aircraft.values():
-                if sector_only and ac.id not in self._in_sector:
+                holder = self.holder_of(ac)
+                if mine_only and (viewer is None or holder != viewer):
                     continue
                 d = decisions.ac_state(ac)
-                d.update(in_sector=ac.id in self._in_sector, assigned=ac.assigned,
+                d.update(sector=ac.sector_id, holder=holder, mine=viewer is not None and holder == viewer,
+                         assigned=ac.assigned,
                          modes={"lateral": ac.lat_mode, "vertical": ac.vert_mode, "speed": ac.spd_mode})
                 acs.append(d)
             return {
                 "t": self.t, "mode": self.mode, "speed": self.speed, "paused": self.paused,
                 "lockstep": self.lockstep,
-                "sector": self.sector, "aircraft": acs,
-                "conflicts": [c for c in self.conflicts if not sector_only or c.get("relevant")],
-                "decisions": [dp.to_dict() for dp in self.decisions.values() if dp.status == "open"],
-                "score": dict(self.score, points=self.points()),
+                "me": {"holder": viewer, "sectors": self.control.sectors_of(viewer) if viewer else []},
+                "sectors": self.control.snapshot(),
+                "aircraft": acs,
+                "conflicts": self.visible_conflicts(viewer),
+                "decisions": [dp.to_dict() for dp in self.visible_decisions(viewer, open_only=True)],
+                "score": self.score_of(viewer) if viewer else {},
                 "event_seq": self.event_seq,
             }
+
+
+__all__ = ["Engine", "ControlError", "AI_MODES"]

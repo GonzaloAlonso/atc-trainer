@@ -43,7 +43,7 @@ export class Overlay {
 
   draw(s) {
     const { ctx } = this;
-    const { camera, store, selectedId, hoverId, conflicts, route, distance, time } = s;
+    const { camera, store, selectedId, hoverId, conflicts, route, distance, time, sectorLabels } = s;
     ctx.clearRect(0, 0, this.w, this.h);
     this.labels = [];
 
@@ -127,7 +127,27 @@ export class Overlay {
     // ---- conflicts
     const blink = Math.floor(time / 400) % 2 === 0;
     ctx.font = FONT_SMALL;
-    for (const [a, b, kind, tTo, h, v, relevant] of conflicts) {
+    // ---- sector labels: who controls what (every controller's sectorization is visible)
+    if (sectorLabels && distance < 2600) {
+      ctx.font = FONT_SMALL;
+      for (const l of sectorLabels) {
+        const p = this.project(l.world, camera);
+        if (!p) continue;
+        const w = ctx.measureText(l.text).width + 10;
+        ctx.globalAlpha = l.mine ? 0.95 : 0.8;
+        ctx.fillStyle = 'rgba(6,10,18,0.7)';
+        ctx.fillRect(p[0] - w / 2, p[1] - 8, w, 15);
+        ctx.strokeStyle = l.color;
+        ctx.strokeRect(p[0] - w / 2 + 0.5, p[1] - 7.5, w - 1, 14);
+        ctx.fillStyle = l.color;
+        ctx.fillText(l.text, p[0] - w / 2 + 5, p[1] + 3);
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    // conflicts arrive already filtered to the viewer's area of responsibility
+    for (const [a, b, kind, tTo, h, v] of conflicts) {
+      const relevant = true;
       const ra = store.map.get(a), rb = store.map.get(b);
       if (!ra?.onScreen || !rb?.onScreen) continue;
       if (!relevant && distance > 900) continue;
@@ -154,7 +174,9 @@ export class Overlay {
     const cand = [];
     for (const r of store.list) {
       if (!r.onScreen) continue;
-      const important = r.flags & (F.SECTOR | F.HUMAN | F.AI | F.LOS | F.STCA | F.REQUEST);
+      // traffic in someone else's sector is theirs to watch: only label it when zoomed in
+      const important = (r.flags & (F.SECTOR | F.LOS | F.STCA | F.REQUEST))
+        || (!r.holder && (r.flags & (F.HUMAN | F.AI)));
       const wanted = r.id === selectedId || important || zoomedIn || this.options.labelsAll;
       if (!wanted && r.id !== hoverId) continue;
       // Hovering only adds a label; it never reorders others (that would move the label away
@@ -214,7 +236,7 @@ export class Overlay {
     // hovered label last so it sits on top
     drawn.sort((a, b) => (a.r.id === hoverId) - (b.r.id === hoverId));
     for (const { r, lines, tw, slot, px, py, dim } of drawn) {
-      const color = PALETTE[r.colorKey] ?? PALETTE.other;
+      const color = r.colorKey === 'foreign' ? r.tint : PALETTE[r.colorKey] ?? PALETTE.other;
       const bx = px + 3, by = py + 2;
       const flash = (r.flags & (F.LOS | F.REQUEST)) && !blink;
       ctx.globalAlpha = dim ? 0.55 : 1;

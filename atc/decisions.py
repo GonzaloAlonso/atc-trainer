@@ -49,6 +49,7 @@ def ac_state(ac):
         "fl": _fl(ac.alt), "cleared_fl": _fl(ac.cleared_alt) if ac.cleared_alt is not None else None,
         "heading": round(ac.hdg), "gs_kt": round(ac.tas), "vs_fpm": round(ac.vs),
         "lateral": ac.lateral_text(), "controller": ac.controller,
+        "sector": getattr(ac, "sector_id", None),
     }
 
 
@@ -150,6 +151,8 @@ class DecisionPoint:
         self.answered_by = None
         self.pending_agent = False
         self.key = None
+        self.sector_ids = []       # sectors involved (set by the engine)
+        self.holders = []          # holder keys responsible for this decision point
 
     def questions(self):
         opt_view = [{
@@ -171,6 +174,7 @@ class DecisionPoint:
             "id": self.id, "kind": self.kind, "status": self.status,
             "created_t": self.created_t, "updated_t": self.updated_t,
             "subjects": self.subject_ids, "state": self.state,
+            "sectors": self.sector_ids, "holders": self.holders,
             "questions": self.questions(),
             "suggestion": self.suggestion, "answer": self.answer, "answered_by": self.answered_by,
         }
@@ -194,7 +198,7 @@ def build_options(engine, dp, subjects, raw_options, t):
 def conflict_decision(engine, a, b, conflict, t):
     state = {
         "time": t,
-        "sector": engine.sector["id"] if engine.sector else None,
+        "sectors": sorted({x.sector_id for x in (a, b) if x.sector_id}),
         "conflict": {"type": conflict["kind"], "time_to_conflict_s": conflict["t_to"],
                      "predicted_h_nm": conflict["h_nm"], "predicted_v_ft": conflict["v_ft"],
                      "current_h_nm": round(distance_nm(a.lat, a.lon, b.lat, b.lon), 1),
@@ -221,7 +225,7 @@ def level_request_decision(engine, ac, requested_fl, t):
     cur = _fl(ac.cleared_alt if ac.cleared_alt is not None else ac.alt)
     kind = "CLIMB" if requested_fl > cur else "DESCEND"
     state = {
-        "time": t, "sector": engine.sector["id"] if engine.sector else None,
+        "time": t, "sectors": [ac.sector_id] if ac.sector_id else [],
         "request": {"type": kind.lower(), "requested_fl": requested_fl, "current_fl": _fl(ac.alt)},
         "aircraft": [ac_state(ac)],
         "neighbours": [ac_state(n) for n in engine.neighbours(ac, 40.0, 8000.0) if n.id != ac.id][:8],
@@ -240,7 +244,7 @@ def level_request_decision(engine, ac, requested_fl, t):
 
 def route_request_decision(engine, ac, t):
     state = {
-        "time": t, "sector": engine.sector["id"] if engine.sector else None,
+        "time": t, "sectors": [ac.sector_id] if ac.sector_id else [],
         "request": {"type": "resume_navigation", "on_heading_s": round(t - (ac.hdg_since or t))},
         "aircraft": [ac_state(ac)],
         "neighbours": [ac_state(n) for n in engine.neighbours(ac, 40.0, 5000.0) if n.id != ac.id][:8],

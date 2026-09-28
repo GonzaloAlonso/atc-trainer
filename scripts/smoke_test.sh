@@ -55,6 +55,11 @@ acurl -X POST "$BASE/api/auth/login" -H 'Content-Type: application/json' \
   -d "{\"username\":\"admin\",\"password\":\"$ADMIN_PASSWORD\"}" >/dev/null || fail "admin login"
 acurl "$BASE/api/admin/users" | grep -q '"username":"admin"' || fail "admin user list"
 
+# sectorization: the catalogue has vertical layers and a controller can take a sector
+acurl "$BASE/api/sectors" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert len(d["sectors"]) == 36 and len(d["layers"]) == 3' \
+  || fail "sector catalogue"
+acurl -X POST "$BASE/api/sectors/ALP-U/take" | grep -q '"ALP-U"' || fail "take a sector"
+
 status=$(acurl "$BASE/api/status")
 version=$(echo "$status" | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])')
 echo "reported version: $version"

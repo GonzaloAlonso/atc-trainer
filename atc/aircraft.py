@@ -92,6 +92,7 @@ class Aircraft:
         self.perf = PERF[self.cls]
         self.lat, self.lon, self.alt, self.hdg, self.tas, self.vs = lat, lon, alt, hdg, gs, vs
         self.spawn_t = t
+        self.sector_id = None          # sector currently flown through (set by the engine)
 
         self.lat_mode, self.vert_mode, self.spd_mode = "PLAN", "PLAN", "PLAN"
         self.tgt_hdg = hdg

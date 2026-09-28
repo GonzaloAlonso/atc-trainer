@@ -39,7 +39,9 @@
         <button data-speed="1">1×</button><button data-speed="2">2×</button><button data-speed="4">4×</button><button data-speed="8">8×</button><button data-speed="16">16×</button>
       </div>
       <label class="field">Scenario <select id="scenario"></select></label>
-      <label class="field">Sector <select id="sector"><option value="">All Europe (observe)</option></select></label>
+      <button id="my-sectors" class="my-sectors" title="The sectors you control: open the Sectors list">
+        <span class="chip" aria-hidden="true"></span><span id="my-sectors-text">No sector</span>
+      </button>
       <label class="field">AI
         <select id="ai-mode"><option value="off">Off</option><option value="advisory">Advisory</option><option value="autonomous">Autonomous</option></select>
         <select id="ai-agent"></select>
@@ -82,11 +84,13 @@
       <button data-tab="alerts" class="on">Alerts <b id="n-alerts">0</b></button>
       <button data-tab="decisions">Decisions <b id="n-dec">0</b></button>
       <button data-tab="traffic">Traffic <b id="n-traffic">0</b></button>
+      <button data-tab="sectors">Sectors <b id="n-sectors">0</b></button>
     </nav>
     <div class="tab-body">
       <div id="tab-alerts" class="tab on"></div>
       <div id="tab-decisions" class="tab"></div>
       <div id="tab-traffic" class="tab"></div>
+      <div id="tab-sectors" class="tab"></div>
     </div>
   </aside>
 
@@ -108,6 +112,7 @@
         <div><span>IAS</span><b id="s-ias">—</b></div>
       </div>
       <div class="strip-modes"><span id="s-lat"></span><span id="s-ctl"></span></div>
+      <div id="s-authority" class="authority"></div>
       <div id="s-pending" class="pending"></div>
     </div>
 

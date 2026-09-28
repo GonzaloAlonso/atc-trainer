@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Example external decision-making agent for ATC Trainer (standard library only).
 
-It signs in (use a dedicated controller account, e.g. "agent"), takes a sector, switches the
-simulator to lockstep (the simulation only advances when the agent asks), and then loops:
-observe -> answer open decision points -> step.
+It signs in, takes a sector (you only see and may only clear traffic in sectors you hold),
+switches the simulator to lockstep (the simulation only advances when the agent asks), and then
+loops: observe -> answer open decision points -> step. Controlling the shared simulation's clock
+(lockstep/step) requires an admin account.
 
-    VISOR_USER=agent VISOR_PASSWORD=... python examples/agent_client.py --sector ALPS-UPPER --steps 120
+    VISOR_USER=admin VISOR_PASSWORD=... python examples/agent_client.py --sector ALP-U --steps 120
 
 Replace `choose()` with a call to your decision model (e.g. Jev): each decision point already
 carries the situation `state` and typed `questions`; the "action" question lists the candidate
@@ -49,7 +50,7 @@ def main():
     ap.add_argument("--url", default=BASE)
     ap.add_argument("--user", default=os.environ.get("VISOR_USER"))
     ap.add_argument("--password", default=os.environ.get("VISOR_PASSWORD"))
-    ap.add_argument("--sector", default="MUAC-DECO")
+    ap.add_argument("--sector", default="MAS-U", help="sector id, e.g. ALP-U (see GET /api/sectors)")
     ap.add_argument("--steps", type=int, default=60)
     ap.add_argument("--dt", type=float, default=5.0, help="simulated seconds per step")
     ap.add_argument("--name", default="example")
@@ -59,7 +60,7 @@ def main():
         ap.error("credentials required: --user/--password or VISOR_USER/VISOR_PASSWORD")
     TOKEN = call("/api/auth/login", {"username": args.user, "password": args.password})["token"]
 
-    call("/api/sector", {"sector": args.sector})
+    print("controlling", call("/api/sectors/%s/take" % args.sector, {})["sectors"])
     call("/api/ai", {"mode": "off"})                       # we are the AI now
     call("/api/sim", {"action": "lockstep", "lockstep": True})
     try:
@@ -74,8 +75,8 @@ def main():
                     print("  rejected:", exc.read().decode())
             if i % 12 == 0:
                 s = obs["score"]
-                print("t=%d aircraft in sector=%d conflicts=%d score=%s" % (
-                    obs["t"], sum(a["in_sector"] for a in obs["aircraft"]), len(obs["conflicts"]), s.get("points")))
+                print("t=%d aircraft in my sectors=%d conflicts=%d score=%s" % (
+                    obs["t"], sum(a["mine"] for a in obs["aircraft"]), len(obs["conflicts"]), s.get("points")))
     finally:
         call("/api/sim", {"action": "lockstep", "lockstep": False})
     print("final score:", call("/api/observation")["score"])

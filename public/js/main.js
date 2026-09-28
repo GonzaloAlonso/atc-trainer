@@ -76,7 +76,7 @@ window.addEventListener('resize', () => {
 });
 
 // ---------------------------------------------------------------- app state
-let sectors = [];
+let catalogue = null;       // sectorization: regions × vertical layers (/api/sectors)
 const app = {
   store,
   selectedId: null,
@@ -110,16 +110,7 @@ const app = {
     const { lat, lon } = worldToLatLon(controls.target.x, controls.target.z);
     return { distance: camera.position.distanceTo(controls.target), lat, lon };
   },
-  onSector(id) {
-    sectorLayer.setActive(id);
-    const s = sectors.find((x) => x.id === id);
-    if (s && app._lastSector !== id) {
-      const lat = s.poly.reduce((a, p) => a + p[0], 0) / s.poly.length;
-      const lon = s.poly.reduce((a, p) => a + p[1], 0) / s.poly.length;
-      flyTo(lat, lon, 900);
-    }
-    app._lastSector = id;
-  },
+
   setStyle(key) {
     tiles.setStyle(key);
     env.setTheme(key);
@@ -142,7 +133,7 @@ vex.oninput = () => {
   view.vexag = Number(vex.value);
   document.getElementById('vexag-out').textContent = `${vex.value}×`;
   clearTimeout(vex._t);
-  vex._t = setTimeout(() => { tiles.rebuild(); sectorLayer.rebuild(sectors); }, 250);
+  vex._t = setTimeout(() => { tiles.rebuild(); sectorLayer.rebuild(); }, 250);
 };
 document.getElementById('vec-min').onchange = (e) => { aircraft.options.vectorMin = Number(e.target.value); };
 document.getElementById('opt-trails').onchange = (e) => { aircraft.options.trails = e.target.checked; };
@@ -169,6 +160,7 @@ canvas.addEventListener('dblclick', (e) => {
 const feed = connect((frame) => {
   store.applyFrame(frame);
   ui.onFrame(frame);
+  if (catalogue) sectorLayer.update(frame.sectorization ?? [], frame.me?.holder ?? null);
   if (app.selectedId && !store.map.has(app.selectedId)) app.select(null);
 }, (up) => { if (!up) ui.toast('Connection lost — reconnecting…', true); },
 () => tutorial.sandboxGone());
@@ -177,12 +169,12 @@ setInterval(() => tutorial.update(), 250);
 
 (async () => {
   try {
-    const [nav, secs] = await Promise.all([api('/api/navdata'), api('/api/sectors')]);
+    const [nav, cat] = await Promise.all([api('/api/navdata'), api('/api/sectors')]);
     overlay.setFixes(nav.fixes);
-    sectors = secs;
-    sectorLayer.build(sectors);
-    ui.setSectors(sectors);
-    if (store.frame?.sector) app.onSector(store.frame.sector);
+    catalogue = cat;
+    sectorLayer.build(catalogue);
+    ui.setSectors(catalogue);
+    if (store.frame) sectorLayer.update(store.frame.sectorization, store.frame.me?.holder);
   } catch (e) { ui.toast('Failed to load navdata: ' + e.message, true); }
   const pollStatus = async () => {
     try { ui.setStatus(await api('/api/status')); } catch { /* ignore */ }
@@ -215,7 +207,7 @@ function frame(now) {
   }
   overlay.draw({
     camera, store, selectedId: app.selectedId, hoverId, distance, time: now,
-    conflicts: store.frame?.conflicts ?? [], route: app.route,
+    conflicts: store.frame?.conflicts ?? [], route: app.route, sectorLabels: sectorLayer.labels(),
   });
   const sel = app.selectedId && store.map.get(app.selectedId);
   if (sel) ui.showStrip(sel, false);

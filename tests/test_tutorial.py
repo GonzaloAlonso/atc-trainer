@@ -57,11 +57,11 @@ def test_sandbox_is_private_and_separate_from_live(client):
     calls = {a["callsign"] for a in obs["aircraft"]}
     assert "TRN303" in calls
 
-    r = client.post("/api/command", json={"text": "TRN303 C 370"}, headers=TUT)
+    r = client.post("/api/command", json={"text": "TRN303 C 330"}, headers=TUT)
     assert r.status_code == 200 and r.json()["accepted"]
-    assert client.get("/api/aircraft/TRN303", headers=TUT).json()["assigned"]["alt"] == 37000
+    assert client.get("/api/aircraft/TRN303", headers=TUT).json()["assigned"]["alt"] == 33000
     # the shared simulation has no training traffic and is untouched
-    assert client.post("/api/command", json={"text": "TRN303 C 370"}).status_code == 400
+    assert client.post("/api/command", json={"text": "TRN303 C 330"}).status_code == 400
     assert "TRN303" not in {a["callsign"] for a in client.get("/api/observation").json()["aircraft"]}
     # sandboxes can't be reset into live traffic
     assert client.post("/api/sim", json={"action": "reset", "mode": "live"}, headers=TUT).status_code == 400
@@ -84,7 +84,7 @@ def test_sandboxes_are_per_user(client):
     with TestClient(client.app) as other:
         login(other, "trainee", "trainee-password")
         client.post("/api/tutorial/start")
-        client.post("/api/command", json={"text": "TRN303 C 370"}, headers=TUT)
+        client.post("/api/command", json={"text": "TRN303 C 330"}, headers=TUT)
         other.post("/api/tutorial/start")
         mine = other.get("/api/aircraft/TRN303", headers=TUT).json()
         assert mine["assigned"]["alt"] is None, "another trainee's clearance must not leak"
@@ -107,10 +107,14 @@ def _advance(e, seconds):
 def test_scenario_produces_conflict_and_pilot_request():
     box = _sandbox()
     e = box.engine
-    e.set_sector("ALPS-UPPER")
-    assert e.find("TRN303") is not None and len(e._in_sector) >= 5
+    me = "human:trainee"
+    e.take_sector("ALP-U", me)
+    e._update_sectors()
+    assert e.find("TRN303").sector_id == "ALP-U"
+    layers = {a.sector_id for a in e.aircraft.values()}
+    assert {"ALP-L", "ALP-U", "ALP-H"} <= layers, "background traffic spans the vertical layers"
 
-    assert e.command("TRN303 C 370", "human:trainee")["accepted"]
+    assert e.command("TRN303 C 330", me, actor=me)["accepted"]
     box.inject_conflict()
     pair = {e.find("TRN101").id, e.find("TRN202").id}
     seen = False
@@ -121,7 +125,7 @@ def test_scenario_produces_conflict_and_pilot_request():
             break
     assert seen, "the injected head-on pair must trigger STCA"
 
-    e.command("TRN101 C 360", "human:trainee")
+    e.command("TRN101 C 320", me, actor=me)
     request = None
     for _ in range(600):
         _advance(e, 2)
@@ -130,7 +134,7 @@ def test_scenario_produces_conflict_and_pilot_request():
         if request:
             break
     assert request is not None and request.subject_ids == [e.find("TRN303").id]
-    assert e.score["los"] == 0, "the vertical solution keeps them separated"
+    assert e.score_of(me)["los"] == 0, "the vertical solution keeps them separated"
 
 
 # ---------------------------------------------------------------------------- lifecycle limits

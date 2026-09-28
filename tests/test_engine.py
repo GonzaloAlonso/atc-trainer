@@ -1,4 +1,7 @@
 from atc.agents import RuleAgent
+from atc.control import human
+
+ME = human("tester")
 
 
 def advance(engine, seconds, dt=2.0):
@@ -11,20 +14,23 @@ def test_replay_spawns_recorded_traffic(engine):
 
 
 def test_command_is_read_back(engine):
-    res = engine.command("TST003 D 370 TL 20D")
+    res = engine.command("TST003 D 370 TL 20D", ME, actor=ME)
     assert len(res["accepted"]) == 2 and not res["rejected"]
     texts = [e["text"] for e in engine.events]
     assert any("descend flight level 370, turn left 20 degrees" in t for t in texts)
-    assert engine.find("TST003").controller == "human"
+    assert engine.find("TST003").controller == ME
 
 
 def test_sector_membership(engine):
-    engine.set_sector("ALPS-UPPER")
-    assert {engine.aircraft[i].callsign for i in engine._in_sector} >= {"TST001", "TST002"}
+    engine._update_sectors()
+    at = {a.callsign: a.sector_id for a in engine.aircraft.values()}
+    assert at == {"TST001": "RHN-H", "TST002": "RHN-H", "TST003": "RHN-H"}
+    assert engine.take_sector("RHN-H", ME) == ["RHN-H"]
+    assert all(engine.holder_of(a) == ME for a in engine.aircraft.values())
 
 
 def test_conflict_decision_resolved_by_rule_agent(engine):
-    engine.set_sector("ALPS-UPPER")
+    engine.take_sector("RHN-H", ME)
     dp = None
     for _ in range(450):              # the pair meets after ~590 s; STCA looks 120 s ahead
         advance(engine, 2)
@@ -43,13 +49,13 @@ def test_conflict_decision_resolved_by_rule_agent(engine):
     answer = RuleAgent().decide(d)
     chosen = next(o for o in q["options"] if o["id"] == answer["action"])
     assert chosen["predicted"]["los_duration_s"] == 0
-    engine.answer_decision(dp.id, answer, "ai:rules")
+    engine.answer_decision(dp.id, answer, "ai:rules", actor=ME)
     assert engine.decisions[dp.id].status == "executed"
 
     # the executed clearance must actually keep the pair separated
     advance(engine, 300)
-    assert engine.score["los"] == 0
-    assert engine.score["decisions_ai"] == 1
+    assert engine.score_of(ME)["los"] == 0
+    assert engine.score_of(ME)["decisions_ai"] == 1
 
 
 def test_flight_reappears_after_recording_gap(store):

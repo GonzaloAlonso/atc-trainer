@@ -3,9 +3,18 @@
 © 2026 Gonzalo Alonso. All rights reserved. Owner, creator and developer: **Gonzalo Alonso**.
 Proprietary software, not open source. See [LICENSE](LICENSE).
 
+[![ATC Trainer 2.0: three controllers share the Madrid region, one per vertical layer](docs/media/atc-trainer-2.0-preview.gif)](docs/media/atc-trainer-2.0-demo.mp4)
+
+▶ **[Watch the 90-second demo video](docs/media/atc-trainer-2.0-demo.mp4)** (MP4, 1280×720). It shows:
+- sign-in and the 3D scope
+- vertical sectorization shared by a human controller, a second controller and the AI
+- responsibility, clearances and readbacks
+- AI advice on a conflict
+- satellite terrain and the guided tutorial
+
 An air traffic control trainer: a 3D working position for European airspace. It is part game, part proof of concept that a decision-making AI can control airspace. A guided tutorial takes newcomers from zero to handling a sector.
 
-Real traffic recorded from the [OpenSky Network](https://openskynetwork.github.io/opensky-api/rest.html) is replayed as a living scenario. You, or an AI agent, take a sector and issue clearances. Each aircraft follows its recorded trajectory until it is cleared otherwise, then flies the clearance with a simple performance model.
+Real traffic recorded from the [OpenSky Network](https://openskynetwork.github.io/opensky-api/rest.html) is replayed as a living scenario. Several controllers, humans or AI agents, work it together: each takes sectors of a vertically layered sectorization and is responsible for the traffic inside them. Each aircraft follows its recorded trajectory until it is cleared otherwise, then flies the clearance with a simple performance model.
 
 ## Run
 
@@ -120,7 +129,7 @@ docker build --build-arg VISOR_VERSION=1.0.0-local -t visor-atc:test . && script
 
 New users are offered a guided tutorial at every sign-in until they complete it. It is optional but strongly recommended. The offer has three answers: *Start*, *Maybe later* and *Don't remind me*. The tutorial is always available from the account menu (**Tutorial**).
 
-- **Private practice sector.** Each trainee gets their own sandbox simulation in the Alps Upper sector with scripted traffic. Clearances there never touch the shared live simulation or other users. Sandboxes end when the trainee leaves, and after 30 minutes idle. At most 20 run at once.
+- **Private practice sector.** Each trainee gets their own sandbox simulation of the Alps region, working its Upper layer (ALP-U) with scripted traffic. Clearances there never touch the shared live simulation or other users. Sandboxes end when the trainee leaves, and after 30 minutes idle. At most 20 run at once.
 - **A wizard with goals.** There are 14 lessons:
   1. welcome
   2. navigating the scope
@@ -142,10 +151,34 @@ New users are offered a guided tutorial at every sign-in until they complete it.
 - **Accounts that existed before the tutorial** are marked as completed and are not prompted; they can still open it from the menu.
 - **Agents can use the sandbox too:** `POST /api/tutorial/start`, then send `X-ATC-Context: tutorial` with any simulation API call, or connect to `/ws?ctx=tutorial`.
 
+## Sectorization and responsibility
+
+The airspace is divided into **12 regions**, and each region is split **vertically** into three layers:
+
+| Layer | Levels |
+|---|---|
+| **L**ower | FL000–245 |
+| **U**pper | FL245–345 |
+| **H**igh | above FL345 |
+
+That makes **36 sectors**, e.g. `ALP-U` = Alps Upper. Airspace outside the regions is unmanned. The boundaries are simplified approximations, not official data.
+
+- **Taking sectors:** each user takes the sectors they want to control in the **Sectors** tab (or with the **My sectors** button). They can combine several. A sector held by another controller can't be taken, although admins can force a takeover or free it.
+- **Handing to the AI:** any free sector, or one of your own, can be handed to the **AI**, which then controls it autonomously. A human can take it back at any time.
+- **Responsibility:** every aircraft inside a sector belongs to its holder.
+  - Only the holder can clear it. Others see the flight strip read-only, and the API answers 403. Aircraft in unmanned airspace can be cleared by anyone.
+  - Check-ins, hand-offs, pilot requests, STCA and loss-of-separation alerts, decision points and radio messages go **only to the controllers responsible** for the sectors involved. Nobody sees issues outside their own area of responsibility; admins can query everything with `GET /api/observation?scope=all`.
+  - Scores are per controller.
+- **Everyone's sectorization is visible:**
+  - in 3D, sectors are stacked volumes: yours are cyan, each other controller has a colour, the AI is violet, free sectors are faint outlines
+  - labels show who holds which sector
+  - aircraft in other controllers' sectors are tinted with their colour
+- **Idle release:** a human's sectors are released after `VISOR_SECTOR_IDLE_MIN` minutes offline (default 10). Assignments are kept in memory, so take your sectors again after a server restart.
+- **Admin-only simulation controls:** pause, speed and scenario (live/replay) change the simulation for everyone, so only **admins** can use them. In the tutorial sandbox the trainee has full control.
+
 ## Playing
 
-- **Scenario:** *Live* runs just behind the newest snapshot. *Replay* starts anywhere in the recorded window and can run at 1–16×.
-- **Sector:** take responsibility for a sector volume. Its traffic is labelled, checks in on the radio and counts for your score.
+- **Scenario:** *Live* runs just behind the newest snapshot. *Replay* starts anywhere in the recorded window and can run at 1–16× (admins).
 - **Clearances:** use the flight-strip panel or the command line (<kbd>/</kbd>):
 
   | | |
@@ -198,9 +231,11 @@ The simulator is the environment, and humans and agents use the same API.
 
 Every option is scored by fast-time prediction: the aircraft and their neighbours are cloned and flown 4 minutes ahead with that clearance applied. The agent chooses from explicit consequences. Answering `{"action": "o3"}` executes the option.
 
-**AI modes** (top bar):
+**AI modes** (top bar), per controller, for decision points in *your* sectors:
 - **Advisory:** the agent's choice is highlighted and you click *Accept*.
 - **Autonomous:** the agent's choice is executed directly.
+
+Sectors handed to the AI are always controlled autonomously by that agent.
 
 The built-in agents are `rules` (the reference baseline) and `jev`.
 
@@ -210,13 +245,28 @@ The built-in agents are `rules` (the reference baseline) and `jev`.
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /api/observation` | full typed state: aircraft, conflicts, open decisions, score |
-| `GET /api/decisions`, `POST /api/decisions/{id}` | list and answer decision points |
-| `POST /api/clearance`, `POST /api/command` | structured or shorthand clearances (`issuer: "ai:<name>"`) |
-| `POST /api/sim` | pause/resume/speed/reset; `lockstep` + `step` so the agent owns the clock |
+| `GET /api/sectors` | sectorization catalogue with the current holders |
+| `POST /api/sectors/{id}/take` · `/release` · `/assign-ai` | take, release or hand a sector to the AI |
+| `GET /api/observation` | all traffic (with sector and holder) plus *your* conflicts, open decisions and score (`scope=all` for admins) |
+| `GET /api/decisions`, `POST /api/decisions/{id}` | list and answer your decision points |
+| `POST /api/clearance`, `POST /api/command` | structured or shorthand clearances for traffic in your sectors (`issuer: "ai:<name>"`) |
+| `POST /api/sim` | pause/resume/speed/reset; `lockstep` + `step` so the agent owns the clock (admins) |
 | `GET /api/events?since=` | radio and alert log |
 | `GET /api/schema` | action space description |
 | `WS /ws` | 2 Hz state frames (used by the UI) |
+
+## Breaking changes in 2.0
+
+- **Sector selection:** `POST /api/sector` is gone. Use `POST /api/sectors/{id}/take` and `/release`. Sector ids changed (e.g. `ALPS-UPPER` became `ALP-U`), and `GET /api/sectors` returns a catalogue object: `layers`, `regions`, `sectors` with holders, and `me`.
+- **Authority:** clearances and decision answers are refused with **403** for aircraft in a sector held by someone else.
+- **Admin-only simulation:** `POST /api/sim` on the shared simulation requires an admin account. Tutorial sandboxes are unaffected.
+- **Per-user AI:** `POST /api/ai` sets your own AI preference; there is no global AI mode any more.
+- **Filtered views:** observation, events, decisions and WebSocket frames are filtered to your area of responsibility. The frame layout changed:
+  - aircraft rows gain `sector` and `controller` columns
+  - per-viewer flags are no longer in the rows
+  - new keys: `me`, `sectorization`, `points`
+  - `score` is yours
+  - `sector` was removed
 
 ## Code map
 
@@ -225,6 +275,8 @@ The built-in agents are `rules` (the reference baseline) and `jev`.
 - `atc/aircraft.py`, `atc/performance.py`: flight model, autopilot modes, pilot delay, performance classes
 - `atc/clearances.py`: clearance model, shorthand parser, readback phrasing
 - `atc/conflicts.py`: STCA and loss-of-separation detection
+- `atc/sectors.py`: sectorization (regions × vertical layers), `sector_at()`
+- `atc/control.py`: sector holders, take/release/AI, idle release
 - `atc/decisions.py`: decision points and fast-time prediction
 - `atc/training.py`: tutorial sandboxes (scripted scenario, per-user engines, idle reaping)
 - `atc/engine.py`: simulation loop, traffic life-cycle, requests, scoring, events
@@ -232,7 +284,8 @@ The built-in agents are `rules` (the reference baseline) and `jev`.
 - `public/js/`: three.js client
   - `tiles.js`: level-of-detail terrain from AWS Terrain Tiles plus Esri imagery
   - `traffic.js`: instanced aircraft, drop lines, vectors, trails
-  - `overlay.js`: ATC symbology and data blocks
+  - `overlay.js`: ATC symbology, data blocks and sector labels
+  - `sectors3d.js`, `holders.js`: stacked 3D sector volumes coloured by holder
   - `ui.js`: panels, strip, radio, command line
   - `tutorial.js`: the guided tutorial wizard (lessons, goal detection, highlights)
 
