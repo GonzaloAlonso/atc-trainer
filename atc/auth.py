@@ -21,6 +21,7 @@ import time
 from collections import defaultdict, deque
 
 from . import config
+from .errors import UserError
 
 log = logging.getLogger("visor.auth")
 
@@ -52,12 +53,14 @@ CREATE INDEX IF NOT EXISTS sessions_user ON sessions (user_id);
 """
 
 USER_FIELDS = ("id, username, role, disabled, must_change, created, updated, last_login, "
-               "tutorial_state, tutorial_step")
+               "tutorial_state, tutorial_step, lang, coach_level")
 TUTORIAL_STATES = (None, "completed", "dismissed")
+LANGS = ("en", "de", "es")
+COACH_LEVELS = ("off", "evaluate", "hints", "advise", "demonstrate")   # see atc/coach/journal.py
 
 
-class AuthError(ValueError):
-    """Invalid input or a forbidden change (message is safe to show to users)."""
+class AuthError(UserError, ValueError):
+    """Invalid input or a forbidden change (shown to users in their language)."""
 
 
 # ---------------------------------------------------------------------------- hashing
@@ -95,19 +98,19 @@ def _token_hash(token):
 
 def check_username(username):
     if not username or not USERNAME_RE.match(username):
-        raise AuthError("username must be 3-32 characters: letters, digits, . _ -")
+        raise AuthError("username_format")
 
 
 def check_password(password):
     if not password or len(password) < MIN_PASSWORD:
-        raise AuthError("password must be at least %d characters" % MIN_PASSWORD)
+        raise AuthError("password_short", n=MIN_PASSWORD)
     if len(password) > 256:
-        raise AuthError("password is too long")
+        raise AuthError("password_long")
 
 
 def check_role(role):
     if role not in ROLES:
-        raise AuthError("role must be one of: %s" % ", ".join(ROLES))
+        raise AuthError("role_invalid", roles=", ".join(ROLES))
 
 
 # ---------------------------------------------------------------------------- store
@@ -124,22 +127,30 @@ class AuthStore:
         self._migrate()
 
     def _migrate(self):
-        """Add tutorial columns to databases created before the tutorial existed.
+        """Bring databases created by older releases up to date.
 
-        Accounts that already exist at that moment are treated as trained (tutorial completed);
-        only accounts created afterwards are offered the tutorial.
+        - Tutorial columns (1.x): accounts that already exist are treated as trained (tutorial
+          completed); only accounts created afterwards are offered the tutorial.
+        - Language and coach level (2.1): existing accounts keep the behaviour they knew (coach
+          off, every decision option visible); new accounts start at the default coach level.
         """
         cols = {r[1] for r in self._db.execute("PRAGMA table_info(users)")}
-        if "tutorial_state" in cols:
-            return
-        with self._lock:
-            self._db.execute("BEGIN")
-            self._db.execute("ALTER TABLE users ADD COLUMN tutorial_state TEXT")
-            self._db.execute("ALTER TABLE users ADD COLUMN tutorial_step INTEGER NOT NULL DEFAULT 0")
-            self._db.execute("ALTER TABLE users ADD COLUMN tutorial_updated REAL")
-            self._db.execute("UPDATE users SET tutorial_state = 'completed', tutorial_updated = ?",
-                             (time.time(),))
-            self._db.execute("COMMIT")
+        if "tutorial_state" not in cols:
+            with self._lock:
+                self._db.execute("BEGIN")
+                self._db.execute("ALTER TABLE users ADD COLUMN tutorial_state TEXT")
+                self._db.execute("ALTER TABLE users ADD COLUMN tutorial_step INTEGER NOT NULL DEFAULT 0")
+                self._db.execute("ALTER TABLE users ADD COLUMN tutorial_updated REAL")
+                self._db.execute("UPDATE users SET tutorial_state = 'completed', tutorial_updated = ?",
+                                 (time.time(),))
+                self._db.execute("COMMIT")
+        if "coach_level" not in cols:
+            with self._lock:
+                self._db.execute("BEGIN")
+                self._db.execute("ALTER TABLE users ADD COLUMN lang TEXT")
+                self._db.execute("ALTER TABLE users ADD COLUMN coach_level TEXT")
+                self._db.execute("UPDATE users SET coach_level = 'off'")
+                self._db.execute("COMMIT")
 
     def _q(self, sql, args=()):
         with self._lock:
@@ -196,15 +207,30 @@ class AuthStore:
                     "VALUES (?, ?, ?, ?, ?, ?)",
                     (username, hash_password(password), role, int(must_change), now, now))
         except sqlite3.IntegrityError:
-            raise AuthError("username '%s' is already taken" % username)
+            raise AuthError("username_taken", user=username)
         return self.get_user(cur.lastrowid)
+
+    def set_prefs(self, user_id, lang=None, coach_level=None):
+        """The user's interface language and coach level."""
+        sets, args = [], []
+        if lang is not None:
+            if lang not in LANGS:
+                raise AuthError("lang_invalid", langs=", ".join(LANGS))
+            sets.append("lang = ?"); args.append(lang)
+        if coach_level is not None:
+            if coach_level not in COACH_LEVELS:
+                raise AuthError("coach_level_invalid", levels=", ".join(COACH_LEVELS))
+            sets.append("coach_level = ?"); args.append(coach_level)
+        if sets:
+            self._q("UPDATE users SET %s WHERE id = ?" % ", ".join(sets), (*args, user_id))
+        return self.get_user(user_id)
 
     def set_tutorial(self, user_id, state="keep", step=None):
         """Record tutorial progress. state: None (not finished), 'completed' or 'dismissed'."""
         sets, args = ["tutorial_updated = ?"], [time.time()]
         if state != "keep":
             if state not in TUTORIAL_STATES:
-                raise AuthError("invalid tutorial state")
+                raise AuthError("tutorial_state_invalid")
             sets.append("tutorial_state = ?"); args.append(state)
         if step is not None:
             sets.append("tutorial_step = ?"); args.append(max(0, int(step)))
@@ -215,13 +241,13 @@ class AuthStore:
                     tutorial_reset=False):
         user = self.get_user(user_id)
         if user is None:
-            raise AuthError("no such user")
+            raise AuthError("no_such_user", 404)
         losing_admin = user["role"] == "admin" and not user["disabled"] and (
             (role is not None and role != "admin") or disabled)
         if losing_admin and self.admin_count(exclude_id=user_id) == 0:
-            raise AuthError("there must be at least one active admin")
+            raise AuthError("last_admin")
         if actor_id == user_id and (disabled or (role is not None and role != user["role"])):
-            raise AuthError("you can't disable yourself or change your own role")
+            raise AuthError("own_role")
         sets, args = [], []
         if role is not None:
             check_role(role)
@@ -245,11 +271,11 @@ class AuthStore:
     def delete_user(self, user_id, actor_id=None):
         user = self.get_user(user_id)
         if user is None:
-            raise AuthError("no such user")
+            raise AuthError("no_such_user", 404)
         if actor_id == user_id:
-            raise AuthError("you can't delete your own account")
+            raise AuthError("own_delete")
         if user["role"] == "admin" and not user["disabled"] and self.admin_count(exclude_id=user_id) == 0:
-            raise AuthError("there must be at least one active admin")
+            raise AuthError("last_admin")
         self._q("DELETE FROM users WHERE id = ?", (user_id,))
 
     def authenticate(self, username, password):
@@ -266,9 +292,9 @@ class AuthStore:
     def change_own_password(self, user_id, current, new):
         row = self._q("SELECT password_hash FROM users WHERE id = ?", (user_id,))
         if not row or not verify_password(current or "", row[0]["password_hash"]):
-            raise AuthError("current password is incorrect")
+            raise AuthError("password_wrong")
         if current == new:
-            raise AuthError("choose a different password")
+            raise AuthError("password_same")
         return self.update_user(user_id, password=new, must_change=False)
 
     # ------------------------------------------------------------------ sessions

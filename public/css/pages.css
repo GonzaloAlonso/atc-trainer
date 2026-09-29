@@ -200,7 +200,7 @@ dl.kv dd { margin: 0; font-family: var(--mono); font-size: 12px; word-break: bre
 .tutorial-btn:hover { border-color: var(--sel); }
 .tutorial-btn.recommended { border-color: rgba(255,225,77,0.55); color: var(--sel); }
 .tutorial-btn .cap { font-size: 13px; line-height: 1; }
-body.training .tutorial-btn { display: none; }
+body.training:not(.exercise) .tutorial-btn { display: none; }
 @media (max-width: 1400px) { .tutorial-btn .label { display: none; } .tutorial-btn { padding: 0 8px; } }
 
 /* ------------------------------------------------------------ sectorization (2.0) */
@@ -250,3 +250,9 @@ button:disabled.icon, #speed-seg button:disabled { cursor: not-allowed; }
   box-shadow: 0 12px 40px rgba(0,0,0,0.5); font-size: 13px;
 }
 .upgrade .primary { padding: 6px 14px; }
+
+/* ------------------------------------------------------------ languages (2.1) */
+html.i18n-pending body { visibility: hidden; }
+.auth-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.lang-pick select { background: #0b1422; border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; font-size: 12px; color: var(--text); }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }

@@ -101,6 +101,20 @@ acurl -X POST "$BASE/api/tutorial/start" >/dev/null || fail "tutorial start"
 acurl -H 'X-ATC-Context: tutorial' "$BASE/api/observation" | grep -q '"callsign":"TRN303"' || fail "tutorial sandbox traffic"
 acurl -X POST "$BASE/api/tutorial/stop" >/dev/null || fail "tutorial stop"
 
+# languages: the login page's translations are public
+curl -fsS "$BASE/locales/de.json" | python3 -c 'import json,sys; assert json.load(sys.stdin)["login"]["submit"]' \
+  || fail "German locale"
+
+# AI coach and exercises: a drill in a private sandbox, the coach level, a session to debrief
+acurl "$BASE/api/exercises" | python3 -c 'import json,sys; assert len(json.load(sys.stdin)["exercises"]) >= 6' \
+  || fail "exercise catalogue"
+acurl -X POST "$BASE/api/exercises/head-on/start" >/dev/null || fail "exercise start"
+acurl -H 'X-ATC-Context: exercise' "$BASE/api/observation" | grep -q '"callsign":"TRN101"' || fail "exercise traffic"
+acurl -X POST "$BASE/api/coach" -H 'Content-Type: application/json' -d '{"level":"hints"}' | grep -q '"hints"' \
+  || fail "coach level"
+acurl "$BASE/api/sessions" | grep -q '"exercise":"head-on"' || fail "coach session"
+acurl -X POST "$BASE/api/exercise/stop" >/dev/null || fail "exercise stop"
+
 user=$(docker exec "$NAME" id -u)
 [ "$user" != "0" ] || fail "container runs as root"
 

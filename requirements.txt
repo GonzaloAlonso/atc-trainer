@@ -1,2 +1,5 @@
 fastapi==0.128.8
 uvicorn[standard]==0.39.0
+# AI coach (Claude). The 1.x SDK needs Python 3.10+ (Docker, CI); 0.125 serves older local setups.
+anthropic==1.9.0; python_version >= "3.10"
+anthropic==0.125.0; python_version < "3.10"

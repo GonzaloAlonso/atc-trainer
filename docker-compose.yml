@@ -1,7 +1,7 @@
 services:
   visor:
     build: .
-    # Set VISOR_IMAGE (e.g. ghcr.io/<owner>/<repo>:1.0.3) to run a published release instead of
+    # Set VISOR_IMAGE (e.g. ghcr.io/gonzaloalonso/atc-trainer:2.1) to run a published release instead of
     # building locally: `docker compose pull && docker compose up -d`.
     image: ${VISOR_IMAGE:-visor-atc:latest}
     restart: unless-stopped
@@ -17,6 +17,9 @@ services:
       VISOR_SESSION_HOURS: ${VISOR_SESSION_HOURS:-168}
       VISOR_COOKIE_SECURE: ${VISOR_COOKIE_SECURE:-auto}
       VISOR_IDLE_SLEEP_MIN: ${VISOR_IDLE_SLEEP_MIN:-5}    # nobody online -> simulation sleeps (0 = never)
+      VISOR_MAX_SANDBOXES: ${VISOR_MAX_SANDBOXES:-20}     # tutorial / exercise sessions at once
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}            # AI coach debriefs and answers (optional)
+      VISOR_COACH_MODEL: ${VISOR_COACH_MODEL:-claude-opus-5-5}
       OPENSKY_CLIENT_ID: ${OPENSKY_CLIENT_ID:-}
       OPENSKY_CLIENT_SECRET: ${OPENSKY_CLIENT_SECRET:-}
       JEV_ENDPOINT: ${JEV_ENDPOINT:-}

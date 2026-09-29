@@ -4,6 +4,8 @@ import re
 from dataclasses import dataclass, asdict
 from typing import Optional
 
+from .errors import Invalid
+
 KINDS = ("CLIMB", "DESCEND", "HEADING", "TURN", "DIRECT", "SPEED", "RESUME")
 
 
@@ -16,31 +18,37 @@ class Clearance:
     def to_dict(self):
         return asdict(self)
 
+    def _int(self):
+        try:
+            return int(self.value)
+        except (TypeError, ValueError):
+            raise Invalid("value_invalid", kind=self.kind)
+
     def validate(self):
         k = self.kind
         if k not in KINDS:
-            raise ValueError("unknown clearance kind %r" % k)
+            raise Invalid("clearance_kind", kind=k)
         if k in ("CLIMB", "DESCEND"):
-            fl = int(self.value)
+            fl = self._int()
             if not 0 <= fl <= 600:
-                raise ValueError("flight level out of range")
+                raise Invalid("fl_range")
             self.value = fl
         elif k == "HEADING":
-            self.value = int(self.value) % 360 or 360
+            self.value = self._int() % 360 or 360
             if self.direction not in (None, "L", "R"):
-                raise ValueError("direction must be L or R")
+                raise Invalid("direction_invalid")
         elif k == "TURN":
-            self.value = int(self.value)
+            self.value = self._int()
             if not 1 <= self.value <= 180 or self.direction not in ("L", "R"):
-                raise ValueError("TURN needs 1-180 degrees and direction L/R")
+                raise Invalid("turn_invalid")
         elif k == "DIRECT":
             if not self.value:
-                raise ValueError("DIRECT needs a fix identifier")
+                raise Invalid("direct_fix")
             self.value = str(self.value).upper()
         elif k == "SPEED":
-            self.value = int(self.value)
+            self.value = self._int()
             if not 60 <= self.value <= 600:
-                raise ValueError("speed out of range")
+                raise Invalid("speed_range")
         return self
 
     def phrase(self):
@@ -90,7 +98,7 @@ def parse_command(text):
     """
     tokens = text.strip().upper().split()
     if len(tokens) < 2:
-        raise ValueError("expected: CALLSIGN COMMAND [VALUE] ...")
+        raise Invalid("cmd_syntax")
     callsign, rest = tokens[0], tokens[1:]
     out = []
     i = 0
@@ -98,13 +106,13 @@ def parse_command(text):
         tok = rest[i]
         op = next((name for rx, name in _PATTERNS if rx.match(tok)), None)
         if op is None:
-            raise ValueError("unknown command %r" % tok)
+            raise Invalid("cmd_unknown", token=tok)
         i += 1
         if op == "RESUME":
             out.append(Clearance("RESUME"))
             continue
         if i >= len(rest):
-            raise ValueError("%s needs a value" % tok)
+            raise Invalid("cmd_value", token=tok)
         arg = rest[i]
         i += 1
         if arg == "FL" and op in ("CLIMB", "DESCEND") and i < len(rest):
@@ -113,24 +121,24 @@ def parse_command(text):
         if op in ("CLIMB", "DESCEND", "LEVEL"):
             m = re.match(r"^(?:FL)?" + _NUM + "$", arg)
             if not m:
-                raise ValueError("bad flight level %r" % arg)
+                raise Invalid("cmd_level", value=arg)
             out.append(Clearance(op, int(m.group(1))))
         elif op in ("TL", "TR", "HDG"):
             d = {"TL": "L", "TR": "R", "HDG": None}[op]
             rel = re.match(r"^\+?(\d{1,3})(?:D|DEG)$", arg)
             if rel:
                 if d is None:
-                    raise ValueError("relative turns need TL/TR")
+                    raise Invalid("cmd_relative")
                 out.append(Clearance("TURN", int(rel.group(1)), d))
             elif re.match(r"^" + _NUM + "$", arg):
                 out.append(Clearance("HEADING", int(arg), d))
             else:
-                raise ValueError("bad heading %r" % arg)
+                raise Invalid("cmd_heading", value=arg)
         elif op == "DIRECT":
             out.append(Clearance("DIRECT", arg))
         elif op == "SPEED":
             if not arg.isdigit():
-                raise ValueError("bad speed %r" % arg)
+                raise Invalid("cmd_speed", value=arg)
             out.append(Clearance("SPEED", int(arg)))
     return callsign, out
 

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="i18n-pending">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -16,26 +16,29 @@
   <canvas id="radar" class="radar-bg" aria-hidden="true"></canvas>
 
   <main class="auth-card">
-    <div class="brand big"><span class="logo"></span>ATC<span class="sub">TRAINER</span></div>
-    <p class="byline">Created and developed by <b>Gonzalo Alonso</b></p>
+    <div class="auth-top">
+      <div class="brand big"><span class="logo"></span>ATC<span class="sub">TRAINER</span></div>
+      <label class="lang-pick"><span class="sr-only" data-i18n="login.language">Language</span><select id="lang"></select></label>
+    </div>
+    <p class="byline" data-i18n-html="login.byline">Created and developed by <b>Gonzalo Alonso</b></p>
 
     <form id="login-form" class="stack" autocomplete="on">
-      <h1>Sign in to the working position</h1>
-      <label>Username <input id="username" name="username" autocomplete="username" required autofocus /></label>
-      <label>Password <input id="password" name="password" type="password" autocomplete="current-password" required /></label>
+      <h1 data-i18n="login.heading">Sign in to the working position</h1>
+      <label><span data-i18n="login.username">Username</span> <input id="username" name="username" autocomplete="username" required autofocus /></label>
+      <label><span data-i18n="login.password">Password</span> <input id="password" name="password" type="password" autocomplete="current-password" required /></label>
       <p id="login-error" class="form-error" role="alert"></p>
-      <button class="primary" type="submit">Sign in</button>
+      <button class="primary" type="submit" data-i18n="login.submit">Sign in</button>
     </form>
 
     <form id="change-form" class="stack hidden" autocomplete="off">
-      <h1>Choose a new password</h1>
-      <p class="dim">Your password must be changed before you continue.</p>
-      <label id="current-wrap">Current password <input id="current" type="password" autocomplete="current-password" /></label>
-      <label>New password <input id="new-password" type="password" autocomplete="new-password" minlength="10" required /></label>
-      <label>Repeat new password <input id="new-password-2" type="password" autocomplete="new-password" minlength="10" required /></label>
-      <p class="hint">At least 10 characters.</p>
+      <h1 data-i18n="login.changeHeading">Choose a new password</h1>
+      <p class="dim" data-i18n="login.changeNote">Your password must be changed before you continue.</p>
+      <label id="current-wrap"><span data-i18n="login.current">Current password</span> <input id="current" type="password" autocomplete="current-password" /></label>
+      <label><span data-i18n="login.new">New password</span> <input id="new-password" type="password" autocomplete="new-password" minlength="10" required /></label>
+      <label><span data-i18n="login.repeat">Repeat new password</span> <input id="new-password-2" type="password" autocomplete="new-password" minlength="10" required /></label>
+      <p class="hint" data-i18n="login.hint">At least 10 characters.</p>
       <p id="change-error" class="form-error" role="alert"></p>
-      <button class="primary" type="submit">Save and continue</button>
+      <button class="primary" type="submit" data-i18n="login.save">Save and continue</button>
     </form>
   </main>
 

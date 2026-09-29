@@ -3,13 +3,14 @@
 from .base import Agent
 from .rules import RuleAgent
 from .jev import JevAgent
+from ..errors import Invalid
 
 REGISTRY = {"rules": RuleAgent, "jev": JevAgent}
 
 
 def create(name):
     if name not in REGISTRY:
-        raise ValueError("unknown agent %r (available: %s)" % (name, ", ".join(REGISTRY)))
+        raise Invalid("unknown_agent", name=name, available=", ".join(REGISTRY))
     return REGISTRY[name]()
 
 

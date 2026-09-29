@@ -19,6 +19,7 @@ EUROPE = {
 
 # --- Users & sessions ----------------------------------------------------------------------
 USERS_DB_PATH = DATA_DIR / "users.db"
+COACH_DB_PATH = DATA_DIR / "coach.db"        # graded decisions, sessions, replays, coach chats
 # Used only when the user table is empty (first start). Empty password -> a random one is
 # generated, printed to the log and must be changed at first login.
 ADMIN_USER = os.environ.get("VISOR_ADMIN_USER") or "admin"
@@ -61,3 +62,14 @@ SECTOR_IDLE_S = float(os.environ.get("VISOR_SECTOR_IDLE_MIN") or 10) * 60
 # With nobody online (no requests, no open scope) for this long, the simulation and tutorial
 # sandboxes go to sleep to save CPU and memory; the recorder keeps running. 0 = never sleep.
 IDLE_SLEEP_S = float(os.environ.get("VISOR_IDLE_SLEEP_MIN") or 5) * 60
+# Private training sandboxes (tutorial, exercises) running at once.
+MAX_SANDBOXES = int(os.environ.get("VISOR_MAX_SANDBOXES") or 20)
+
+# --- AI coach ------------------------------------------------------------------------------
+# Plain-language debriefs and answers come from Claude when an API key is set; without one the
+# coach still explains, grades and hints with its built-in templates.
+COACH_PROVIDER = (os.environ.get("VISOR_COACH_PROVIDER") or "claude").lower()   # claude | template
+COACH_MODEL = os.environ.get("VISOR_COACH_MODEL") or "claude-opus-5-5"
+COACH_EFFORT = os.environ.get("VISOR_COACH_EFFORT") or "medium"                   # low | medium | high
+COACH_TIMEOUT_S = float(os.environ.get("VISOR_COACH_TIMEOUT") or 60)
+COACH_DAILY_QUESTIONS = int(os.environ.get("VISOR_COACH_DAILY_QUESTIONS") or 60)  # per user

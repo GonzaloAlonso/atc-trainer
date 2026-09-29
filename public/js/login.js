@@ -1,4 +1,9 @@
 import { startRadar } from './radar-scope.js';
+import { getLang, initI18n, languageSelect, t } from './i18n.js';
+
+await initI18n();
+document.title = t('login.title');
+languageSelect(document.getElementById('lang'), false);
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -11,10 +16,10 @@ function nextUrl() {
 
 async function post(path, body) {
   const res = await fetch(path, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'Accept-Language': getLang() }, body: JSON.stringify(body),
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(typeof data.detail === 'string' ? data.detail : `Error ${res.status}`);
+  if (!res.ok) throw new Error(typeof data.detail === 'string' ? data.detail : data.message || `Error ${res.status}`);
   return data;
 }
 
@@ -34,6 +39,8 @@ $('login-form').onsubmit = async (e) => {
   btn.disabled = true;
   try {
     const { user } = await post('/api/auth/login', { username: $('username').value.trim(), password: $('password').value });
+    // the language picked here becomes the account's language the first time
+    if (!user.lang) await post('/api/auth/prefs', { lang: getLang() }).catch(() => {});
     if (user.must_change) showChange($('password').value);
     else location.replace(nextUrl());
   } catch (err) {
@@ -48,7 +55,7 @@ $('change-form').onsubmit = async (e) => {
   e.preventDefault();
   $('change-error').textContent = '';
   if ($('new-password').value !== $('new-password-2').value) {
-    $('change-error').textContent = 'The new passwords do not match.';
+    $('change-error').textContent = t('login.mismatch');
     return;
   }
   try {

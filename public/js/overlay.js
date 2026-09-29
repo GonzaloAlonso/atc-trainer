@@ -43,7 +43,7 @@ export class Overlay {
 
   draw(s) {
     const { ctx } = this;
-    const { camera, store, selectedId, hoverId, conflicts, route, distance, time, sectorLabels } = s;
+    const { camera, store, selectedId, hoverId, conflicts, route, distance, time, sectorLabels, whatif, focus } = s;
     ctx.clearRect(0, 0, this.w, this.h);
     this.labels = [];
 
@@ -168,6 +168,21 @@ export class Overlay {
       }
       ctx.globalAlpha = 1;
     }
+
+    // ---- the coach's hint points at these aircraft
+    if (focus) {
+      const k = (time % 1200) / 1200;
+      for (const id of focus) {
+        const r = store.map.get(id);
+        if (!r?.onScreen) continue;
+        ctx.strokeStyle = `rgba(255,225,77,${1 - k})`;
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(r.sx, r.sy, 10 + 26 * k, 0, Math.PI * 2); ctx.stroke();
+      }
+    }
+
+    // ---- what-if: predicted tracks and closest approach
+    whatif?.draw(ctx, this, camera, time);
 
     // ---- data blocks
     const zoomedIn = distance < 650;

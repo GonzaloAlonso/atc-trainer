@@ -16,7 +16,9 @@ import threading
 import time
 
 from .aircraft import FlightPlan
+from .coach.journal import summarize
 from .engine import Engine
+from .errors import Busy
 from .store import Store
 
 SECTOR = "ALP-U"
@@ -75,15 +77,23 @@ def straight_plan(icao, callsign, lat, lon, alt, gs, trk, t_start, duration_s=18
 
 
 class Sandbox:
-    def __init__(self, navdata):
+    """The guided tutorial's sandbox."""
+    kind = "tutorial"
+
+    def __init__(self, navdata, username=None, coach_store=None, level=None):
         self.created = self.last_used = time.time()
+        self.username = username
         self.store = Store(":memory:")
         # Scenario time sits hours in the past so replay can run at up to 16x without
         # catching up with the wall clock.
         t0 = int(time.time()) - 3 * 3600
         write_snapshots(self.store, [TRAINEE] + BACKGROUND, t0)
-        self.engine = Engine(self.store, navdata)
+        self.engine = Engine(self.store, navdata, coach_store=coach_store, context="tutorial")
         self.engine.reset("replay", t0)
+        if username:
+            if level:
+                self.engine.coach.set_level(username, level)
+            self.engine.coach.begin(username)
         self.engine.start()
 
     def inject_conflict(self):
@@ -102,31 +112,49 @@ class Sandbox:
 
     def stop(self):
         self.engine.stop()
+        c = self.engine.coach
+        if self.username and c.store is not None and self.username in c.sessions:
+            c.finish(self.username)
+            sid = c.sessions[self.username]
+            c.store.end_session(sid, "ended", sim_t1=self.engine.t, summary=summarize(
+                [e for e in c.entries_of(self.username) if e.get("session") == sid]))
+            if c.recording:
+                c.store.save_recording(sid, c.recording)
 
 
 class TutorialManager:
-    """One sandbox per user, created on demand and reaped when idle."""
+    """One private sandbox per user (the tutorial or an exercise), created on demand and reaped
+    when idle. Starting a new one ends the previous one."""
 
-    def __init__(self, navdata, max_sandboxes=20, idle_s=1800):
+    def __init__(self, navdata, max_sandboxes=20, idle_s=1800, coach_store=None):
         self.navdata = navdata
         self.max = max_sandboxes
         self.idle_s = idle_s
+        self.coach_store = coach_store
         self._boxes = {}
         self._lock = threading.Lock()
 
-    def start(self, user_id):
+    def start(self, user_id, factory=None, username=None, level=None):
+        """factory: builds the sandbox (default: the tutorial's)."""
         with self._lock:
             old = self._boxes.pop(user_id, None)
-            if old is not None:
-                old.stop()
+        if old is not None:
+            old.stop()
+        with self._lock:
             if len(self._boxes) >= self.max:
-                raise OverflowError("too many training sessions, try again later")
-            box = self._boxes[user_id] = Sandbox(self.navdata)
-            return box
+                raise Busy("too_many_sandboxes")
+        box = (factory() if factory is not None
+               else Sandbox(self.navdata, username=username, coach_store=self.coach_store, level=level))
+        with self._lock:
+            self._boxes[user_id] = box
+        return box
 
-    def get(self, user_id):
+    def get(self, user_id, kind=None):
+        """The user's sandbox (of that kind, if given), or None."""
         with self._lock:
             box = self._boxes.get(user_id)
+            if box is not None and kind is not None and box.kind != kind:
+                return None
             if box is not None:
                 box.last_used = time.time()
             return box
@@ -146,6 +174,10 @@ class TutorialManager:
         for b in boxes:
             b.stop()
         return len(boxes)
+
+    def boxes(self):
+        with self._lock:
+            return dict(self._boxes)
 
     def engines(self):
         with self._lock:

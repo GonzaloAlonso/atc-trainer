@@ -62,6 +62,7 @@ def test_authority_visibility_and_scores(client):
             assert {"RHN-H": "human:bob", "RHN-U": "human:admin"}.items() <= {s: h for s, h, _ in frame["sectorization"] if h}.items()
 
         _run_until(client, lambda o: bool(bob.get("/api/decisions").json()), dt=5, limit=40)
+        bob.post("/api/coach", json={"level": "off"})     # every option visible (the decision assistant)
         dps = bob.get("/api/decisions").json()
         assert dps and all("human:bob" in d["holders"] for d in dps)
         assert client.get("/api/decisions").json() == []

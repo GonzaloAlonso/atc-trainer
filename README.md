@@ -12,7 +12,7 @@ Proprietary software, not open source. See [LICENSE](LICENSE).
 - AI advice on a conflict
 - satellite terrain and the guided tutorial
 
-An air traffic control trainer: a 3D working position for European airspace. It is part game, part proof of concept that a decision-making AI can control airspace. A guided tutorial takes newcomers from zero to handling a sector.
+An air traffic control trainer: a 3D working position for European airspace. It is part game, part proof of concept that a decision-making AI can control airspace. A guided tutorial takes newcomers from zero to handling a sector, decision drills train one kind of situation at a time, and an **AI coach** grades every decision, explains the alternatives, gives hints and debriefs each session. The interface is available in **English, German and Spanish**.
 
 Real traffic recorded from the [OpenSky Network](https://openskynetwork.github.io/opensky-api/rest.html) is replayed as a living scenario. Several controllers, humans or AI agents, work it together: each takes sectors of a vertically layered sectorization and is responsible for the traffic inside them. Each aircraft follows its recorded trajectory until it is cleared otherwise, then flies the clearance with a simple performance model.
 
@@ -40,12 +40,14 @@ docker compose logs -f
 ```
 
 - The image contains the app and the airport and navaid data, which is downloaded at build time.
-- Recordings **and user accounts** live in the `visor-data` volume (`/data`), so they survive rebuilds and upgrades. Keep the container running to build the 24 h history.
+- Recordings, **user accounts and coaching sessions** (`coach.db`: graded decisions, replays, coach conversations) live in the `visor-data` volume (`/data`), so they survive rebuilds and upgrades. Keep the container running to build the 24 h history.
+- **AI coach:** set `ANTHROPIC_API_KEY` for plain-language debriefs and questions (Claude, `VISOR_COACH_MODEL`, default `claude-opus-5-5`). Without it the coach still explains, grades and hints with built-in texts. See [AI coach](#ai-coach).
+- **Training sessions:** at most `VISOR_MAX_SANDBOXES` private sandboxes (tutorial or exercise) run at once (default 20).
 - **Idle sleep:** when nobody is online (no signed-in requests and no open scope) for `VISOR_IDLE_SLEEP_MIN` minutes (default 5, `0` = never), the simulation and tutorial sandboxes stop and free their memory. The OpenSky recorder keeps running, so the 24 h history stays complete. The next sign-in wakes the simulation with a fresh live scenario; the health probe does not wake it. `GET /api/status` reports it under `power`.
 - Run **one** container. The simulation state is held in memory, so do not scale the service.
 - The container listens on `127.0.0.1:8000` of the host. Publish it through a reverse proxy with TLS on its own (sub)domain; the UI uses absolute `/api` and `/ws` paths, so a sub-path such as `/visor/` won't work.
 
-To run a published release instead of building on the server, set `VISOR_IMAGE=ghcr.io/<owner>/<repo>:<version>` in `.env`, then run `docker compose pull && docker compose up -d`.
+To run a published release instead of building on the server, set `VISOR_IMAGE=ghcr.io/gonzaloalonso/atc-trainer:<version>` in `.env` (for example `:2.1` to follow the 2.1.x patches), then run `docker compose pull && docker compose up -d`.
 
 ### Accounts
 
@@ -113,7 +115,7 @@ Always serve it over HTTPS on a public server; otherwise passwords and session c
 2. **Test**: pytest (flight model, parser, conflict detection, engine plus rule agent, API), byte-compilation, a syntax check of the frontend modules, and shellcheck.
 3. **Build and verify**: builds the image with the version baked in, starts it, and runs [scripts/smoke_test.sh](scripts/smoke_test.sh). The smoke test checks health, the reported version and label, UI, docs, navdata, the API contract, and that the container runs as non-root.
 4. **Publish** (default branch only, after all checks pass):
-   - pushes `ghcr.io/<owner>/<repo>:X.Y.Z`, `:X.Y` and `:latest` for amd64 and arm64
+   - pushes `ghcr.io/<owner>/<repo>:X.Y.Z`, `:X.Y` and `:latest` for amd64 and arm64 (here `ghcr.io/gonzaloalonso/atc-trainer`)
    - creates the annotated tag `vX.Y.Z` on the commit
    - creates a GitHub Release `vX.Y.Z` with generated notes
 
@@ -141,16 +143,63 @@ New users are offered a guided tutorial at every sign-in until they complete it.
   7. resume own navigation
   8. level changes
   9. spotting an STCA
-  10. resolving the conflict
-  11. the decision assistant and AI advisory
+  10. resolving the conflict (with a what-if prediction or a hint)
+  11. the AI coach and its levels
   12. answering a pilot request
-  13. time and score
+  13. time, grades and score
   14. finish
 
   Each lesson states its goal and how to reach it, and highlights the control involved. The goal is ticked automatically when the trainee has done it. Lessons can be skipped; the conflict lesson can be replayed if separation is lost.
 - **Progress is stored per user** in `users.db`: not started, the lesson reached, completed, or declined. Trainees can resume where they left off. Admins see each user's status on the admin page and can reset it.
 - **Accounts that existed before the tutorial** are marked as completed and are not prompted; they can still open it from the menu.
 - **Agents can use the sandbox too:** `POST /api/tutorial/start`, then send `X-ATC-Context: tutorial` with any simulation API call, or connect to `/ws?ctx=tutorial`.
+- The **Training center** (🎓 button, or the account menu) opens the tutorial, the exercises and your past sessions.
+
+## Exercises and debriefs
+
+Six **decision drills** each train one kind of situation in the trainee's private copy of Alps Upper (ALP-U):
+
+| Drill | Level | Situation |
+|---|---|---|
+| Head-on | easy | two airliners at the same level, towards each other |
+| Crossing at right angles | easy | a 90° crossing at the same level |
+| Climbing through traffic | medium | a departure climbs through crossing traffic |
+| Catching up | medium | a fast jet behind a slower one on the same track |
+| A request you can't grant yet | medium | a level request blocked by crossing traffic, grantable later |
+| The obvious level is taken | hard | a head-on pair beside traffic one level up, then a second conflict |
+
+- **Running an exercise:** the trainee holds the sector from the start and owns the clock (pause, 1–16×). When the time is up the simulation pauses and the debrief opens.
+- **Debrief:** grade and average, the score parts (safety, timing, efficiency), competencies, a timeline, and one card per situation: what was predicted, what the trainee did and when, the reference answer and why, what actually happened, and the coach's feedback.
+- **Replay in 3D:** the recorded traffic of the session plays in the scope (1–16×, with a scrubber).
+- **Rewind & retry:** goes back to just before a situation (snapshots every 15 simulated seconds). The attempt so far is kept with its grades, and a new attempt starts, linked to it.
+- **Exercises are declarative** (`atc/exercises/`): a sector, a duration, flights placed around meeting points, and timed events such as a pilot request. New packs are plain Python data.
+
+## AI coach
+
+The coach follows every situation in a human controller's sectors (conflicts and pilot requests), in live traffic, the tutorial and exercises.
+
+- **Grading:** each decision is scored out of 100: **safety** 50 (separation kept, margin), **timing** 25 (how long before the predicted loss the controller acted), **efficiency** 25 (the smallest change that works: one clearance, 1000 ft rather than a 30° turn, no action when none is needed). Hints cost 3, 7 or 15 points, and a loss of separation caps the grade at 20. Letters: A ≥ 85, B ≥ 70, C ≥ 55, D ≥ 40, E below. The reference is the rule-based AI's answer, fixed when the controller had to decide.
+- **Early detection:** conflicts are followed from about 6 minutes ahead, before the 2-minute STCA, so a controller who resolves one early gets the credit for it.
+- **Levels** (per user, remembered; the top-bar **Coach** select):
+
+  | Level | Decisions list | Coach |
+  |---|---|---|
+  | Off | every option with its prediction | nothing reported (grades are still recorded) |
+  | Evaluate | options hidden: decide yourself | a grade card after each situation |
+  | Hints | options hidden, except those a hint revealed | grades; hints on request (<kbd>H</kbd>) or when a situation lingers: 1 where to look, 2 what is wrong, 3 a solution |
+  | Advise | every option, with why it is or isn't the answer | grades; the AI's advice to accept |
+  | Demonstrate | every option | the AI resolves your situations and explains each move (not graded) |
+
+  New accounts start at Hints; accounts that existed before 2.1 keep the behaviour they knew (Off).
+- **What-if in 3D:** hover a decision option to see the predicted tracks, the closest point of approach, a ring of the horizontal minimum and the ±1000 ft band. End a command with `?` (e.g. `TRN101 C 320 ?`), or switch the flight strip to **?** mode, to predict a clearance before sending it.
+- **Language coach (optional):** with `ANTHROPIC_API_KEY` set, the debrief includes a written debrief and the trainee can ask questions about the session, in their language. It uses the official Anthropic SDK with Claude (`VISOR_COACH_MODEL`, default `claude-opus-5-5`; effort `VISOR_COACH_EFFORT`, default `medium`), a cached instructor prompt, and server-side fallback (`fallbacks: "default"`) so a declined request is retried on the recommended model. Answers are grounded on the session's record only; the coach never issues clearances. Each user may ask `VISOR_COACH_DAILY_QUESTIONS` questions a day (default 60). Without a key, or if a call fails, the built-in texts are used.
+- **Privacy:** Claude receives the session's situations (callsigns, levels, predictions, actions, grades), never the user's name or email.
+
+## Languages
+
+The interface, the tutorial, the exercises, every coach message and the server's error messages are available in **English, German and Spanish**. The language follows the user's choice (account menu, or the login page), then the browser. Radio phraseology stays in ICAO English, as in European upper airspace, and so do pilots' replies such as "unable flight level 450".
+
+API errors carry a stable `code` and its `params` next to the `detail` text, for example `{"detail": "Kein Luftfahrzeug NOBODY", "code": "no_aircraft", "params": {"ident": "NOBODY"}}`. The text follows the request's `Accept-Language` (the interface sends its current language), then the account's language, then English, so agents get English unless they ask otherwise. Validation errors (422) keep FastAPI's list in `detail` and add a readable `message`.
 
 ## Sectorization and responsibility
 
@@ -232,11 +281,13 @@ The simulator is the environment, and humans and agents use the same API.
 
 Every option is scored by fast-time prediction: the aircraft and their neighbours are cloned and flown 4 minutes ahead with that clearance applied. The agent chooses from explicit consequences. Answering `{"action": "o3"}` executes the option.
 
-**AI modes** (top bar), per controller, for decision points in *your* sectors:
-- **Advisory:** the agent's choice is highlighted and you click *Accept*.
-- **Autonomous:** the agent's choice is executed directly.
+**AI assistance** follows your coach level (see [AI coach](#ai-coach)), for decision points in *your* sectors:
+- **Advise:** the agent's choice is highlighted and you click *Accept*.
+- **Demonstrate:** the agent's choice is executed directly, and the coach explains it.
 
-Sectors handed to the AI are always controlled autonomously by that agent.
+The AI select next to the coach level picks the agent. Sectors handed to the AI are always controlled autonomously by that agent. `POST /api/ai` still accepts the modes `off`, `advisory` and `autonomous` (the levels Off, Advise and Demonstrate).
+
+Every option also carries its `role` (`monitor`, `vertical`, `lateral`, `approve`, `deny`, ...) and a `why` message, and the decision point names the reference answer in `best`.
 
 The built-in agents are `rules` (the reference baseline) and `jev`.
 
@@ -253,8 +304,28 @@ The built-in agents are `rules` (the reference baseline) and `jev`.
 | `POST /api/clearance`, `POST /api/command` | structured or shorthand clearances for traffic in your sectors (`issuer: "ai:<name>"`) |
 | `POST /api/sim` | pause/resume/speed/reset; `lockstep` + `step` so the agent owns the clock (admins) |
 | `GET /api/events?since=` | radio and alert log |
+| `POST /api/probe` | predict a clearance without issuing it (3D tracks, closest approach, no-action baseline) |
+| `GET /api/decisions/{id}/whatif?option=` | 3D prediction of one option |
+| `GET /api/coach`, `POST /api/coach` | your coach level, and the language coach's status |
+| `POST /api/coach/hint` | the next hint for one of your situations (costs points) |
+| `GET /api/exercises`, `POST /api/exercises/{id}/start` | the drills, with your best result; start one (`X-ATC-Context: exercise`) |
+| `POST /api/exercise/rewind`, `/stop` | rewind to a time or to before a situation; leave |
+| `GET /api/sessions`, `GET /api/sessions/{id}` | your coached sessions and their graded situations |
+| `GET /api/sessions/{id}/replay` | recorded traffic for the 3D replay |
+| `POST /api/sessions/{id}/debrief`, `/ask` | the coach's debrief and answers, in `lang` (en, de, es) |
+| `POST /api/auth/prefs` | your language and coach level |
 | `GET /api/schema` | action space description |
 | `WS /ws` | 2 Hz state frames (used by the UI) |
+
+In the UI, decision options follow the user's coach level. Agents that sign in with a bearer token always get every option, whatever the account's coach level.
+
+## Changes in 2.1
+
+- **Coach levels replace the AI modes.** The AI mode select became the **Coach** select; `POST /api/ai` modes map to the levels `off`, `advise` and `demonstrate` and are remembered.
+- **Options can be hidden.** At the Evaluate and Hints levels, a user's frames, `/api/decisions` and `/api/observation` show only the options a hint revealed, and answering a hidden option returns 403. Requests with a bearer token (agents) are not affected.
+- **Frames** gain `coach` (level, open hints, latest grades) and, in exercises, `exercise`. Decision options gain `role` and `why`, and decision points `best` (hidden together with the options). Events can carry a `msg` (`{key, p}`) and a `grade`.
+- **Errors in the user's language:** error responses add `code` and `params` to `detail`, and `detail` follows `Accept-Language` or the account's language (English by default). Clients that matched error texts should match `code`; the English texts are unchanged.
+- **New data file:** `coach.db` in the data directory.
 
 ## Breaking changes in 2.0
 
@@ -280,6 +351,8 @@ The built-in agents are `rules` (the reference baseline) and `jev`.
 - `atc/control.py`: sector holders, take/release/AI, idle release
 - `atc/decisions.py`: decision points and fast-time prediction
 - `atc/training.py`: tutorial sandboxes (scripted scenario, per-user engines, idle reaping)
+- `atc/exercises/`: declarative exercises, the decision drills, and the exercise runner (timeline, snapshots, rewind)
+- `atc/coach/`: the AI coach: explanations (`explain.py`), grading, the decision journal and hints (`journal.py`), sessions (`store.py`), the language coach (`llm.py`) and its messages (`text.py`)
 - `atc/engine.py`: simulation loop, traffic life-cycle, requests, scoring, events
 - `atc/api.py`: FastAPI REST and WebSocket
 - `public/js/`: three.js client
@@ -289,6 +362,8 @@ The built-in agents are `rules` (the reference baseline) and `jev`.
   - `sectors3d.js`, `holders.js`: stacked 3D sector volumes coloured by holder
   - `ui.js`: panels, strip, radio, command line
   - `tutorial.js`: the guided tutorial wizard (lessons, goal detection, highlights)
+  - `coach.js`, `debrief.js`, `whatif.js`: coach cards and hints, training center and exercises, debrief and 3D replay, what-if predictions
+  - `i18n.js` and `public/locales/{en,de,es}.json`: translations
 
 ## About, build information and copyright
 

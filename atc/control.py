@@ -9,14 +9,12 @@ import threading
 import time
 
 from . import sectors
+from .errors import UserError
 
 
-class ControlError(Exception):
+class ControlError(UserError):
     """Refused sector operation. `status` is the HTTP code the API should answer with."""
-
-    def __init__(self, message, status=409):
-        super().__init__(message)
-        self.status = status
+    status = 409
 
 
 def human(username):
@@ -54,7 +52,7 @@ class Control:
     # ------------------------------------------------------------------ changes
     def _check(self, sector_id):
         if sector_id not in sectors.BY_ID:
-            raise ControlError("unknown sector %s" % sector_id, 404)
+            raise ControlError("unknown_sector", 404, sector=sector_id)
 
     def take(self, sector_id, holder, force=False):
         """Assign a sector to holder. Returns the previous holder (or None)."""
@@ -64,7 +62,7 @@ class Control:
             if cur == holder:
                 return cur
             if cur and cur.startswith("human:") and not force:
-                raise ControlError("%s is controlled by %s" % (sectors.BY_ID[sector_id]["name"], display(cur)))
+                raise ControlError("sector_held", sector=sectors.BY_ID[sector_id]["name"], holder=display(cur))
             self.holders[sector_id] = holder
             if holder.startswith("human:"):
                 self._seen[holder[6:]] = self.clock()
@@ -78,7 +76,7 @@ class Control:
             if cur is None:
                 return None
             if cur != holder and not force:
-                raise ControlError("%s is controlled by %s" % (sectors.BY_ID[sector_id]["name"], display(cur)), 403)
+                raise ControlError("sector_held", 403, sector=sectors.BY_ID[sector_id]["name"], holder=display(cur))
             del self.holders[sector_id]
             return cur
 
@@ -88,7 +86,7 @@ class Control:
         with self._lock:
             cur = self.holders.get(sector_id)
             if cur and cur.startswith("human:") and cur != by_holder and not force:
-                raise ControlError("%s is controlled by %s" % (sectors.BY_ID[sector_id]["name"], display(cur)))
+                raise ControlError("sector_held", sector=sectors.BY_ID[sector_id]["name"], holder=display(cur))
             self.holders[sector_id] = "ai:" + agent
             return cur
 

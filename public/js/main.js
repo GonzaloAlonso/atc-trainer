@@ -7,8 +7,16 @@ import { SectorLayer } from './sectors3d.js';
 import { TrafficStore, AircraftLayer } from './traffic.js';
 import { Overlay } from './overlay.js';
 import { UI } from './ui.js';
-import { api, connect } from './net.js';
+import { api, connect, getContext } from './net.js';
 import { Tutorial } from './tutorial.js';
+import { initI18n, t } from './i18n.js';
+import { WhatIf } from './whatif.js';
+import { Debrief } from './debrief.js';
+import { CoachUI } from './coach.js';
+
+// The user's language first: everything below renders text.
+const me = await api('/api/auth/me').catch(() => null);
+await initI18n(me?.lang);
 
 // ---------------------------------------------------------------- renderer & scene
 const canvas = document.getElementById('gl');
@@ -122,6 +130,9 @@ const app = {
   },
 };
 const ui = new UI(app);
+if (me) ui.setMe(me);
+app.whatif = new WhatIf(app, ui);
+app.replay = null;             // a debrief's 3D replay: live frames wait meanwhile
 
 let savedStyle = 'radar';
 try { savedStyle = localStorage.getItem('visor.style') || 'radar'; } catch { /* ignore */ }
@@ -158,13 +169,17 @@ canvas.addEventListener('dblclick', (e) => {
 
 // ---------------------------------------------------------------- data
 const feed = connect((frame) => {
+  if (app.replay) { app.replay.live = frame; return; }
   store.applyFrame(frame);
   ui.onFrame(frame);
   if (catalogue) sectorLayer.update(frame.sectorization ?? [], frame.me?.holder ?? null);
   if (app.selectedId && !store.map.has(app.selectedId)) app.select(null);
-}, (up) => { if (!up) ui.toast('Connection lost — reconnecting…', true); },
-() => tutorial.sandboxGone());
+}, (up) => { if (!up) ui.toast(t('toast.reconnecting'), true); },
+() => (getContext() === 'exercise' ? app.coach.sandboxGone() : tutorial.sandboxGone()));
 const tutorial = new Tutorial({ app, ui, store, feed });
+if (me) tutorial.me = me;
+const debrief = new Debrief({ app, ui, store, sectorLayer });
+app.coach = new CoachUI({ app, ui, store, feed, tutorial, debrief });
 setInterval(() => tutorial.update(), 250);
 
 (async () => {
@@ -175,7 +190,7 @@ setInterval(() => tutorial.update(), 250);
     sectorLayer.build(catalogue);
     ui.setSectors(catalogue);
     if (store.frame) sectorLayer.update(store.frame.sectorization, store.frame.me?.holder);
-  } catch (e) { ui.toast('Failed to load navdata: ' + e.message, true); }
+  } catch (e) { ui.toast(t('toast.navdata', { error: e.message }), true); }
   const pollStatus = async () => {
     try { ui.setStatus(await api('/api/status')); } catch { /* ignore */ }
   };
@@ -205,9 +220,11 @@ function frame(now) {
     hoverId = overlay.hitTest(pointer.x, pointer.y, store);
     canvas.style.cursor = hoverId ? 'pointer' : '';
   }
+  const focus = app.coach.focus && now < app.coach.focus.until ? app.coach.focus.ids : null;
   overlay.draw({
     camera, store, selectedId: app.selectedId, hoverId, distance, time: now,
     conflicts: store.frame?.conflicts ?? [], route: app.route, sectorLabels: sectorLayer.labels(),
+    whatif: app.whatif, focus,
   });
   const sel = app.selectedId && store.map.get(app.selectedId);
   if (sel) ui.showStrip(sel, false);
@@ -216,4 +233,4 @@ function frame(now) {
 }
 requestAnimationFrame(frame);
 
-window.visor = { scene, camera, controls, store, tiles, app, overlay, tutorial, worldToLatLon, toWorld, FT };
+window.visor = { scene, camera, controls, store, tiles, app, overlay, tutorial, debrief, worldToLatLon, toWorld, FT };

@@ -340,11 +340,15 @@ class Aircraft:
         self.lat, self.lon = move(self.lat, self.lon, self.hdg, self.tas * dt / 3600.0)
 
     # ------------------------------------------------------------------ helpers
-    def clone(self):
+    def clone(self, keep_rng=False):
+        """Independent copy for fast-time prediction, or (keep_rng) an exact snapshot that
+        continues with the same pilot reaction times."""
         c = copy.copy(self)
         c.pending = list(self.pending)
         c.assigned = dict(self.assigned)
         c.rng = random.Random(0)
+        if keep_rng:
+            c.rng.setstate(self.rng.getstate())
         return c
 
     @property

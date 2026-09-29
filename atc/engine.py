@@ -11,6 +11,7 @@ the frame is serialized once; `frame_for(viewer)` adds the viewer-specific part.
 """
 
 import collections
+import copy
 from bisect import bisect_right
 import json
 import logging
@@ -23,7 +24,9 @@ from concurrent.futures import ThreadPoolExecutor
 from . import agents, config, conflicts, decisions, sectors
 from .aircraft import Aircraft
 from .clearances import Clearance, parse_command, readback
+from .coach.journal import Coach
 from .control import Control, ControlError, display
+from .errors import Denied, Invalid
 from .scenario import PlanLoader
 
 log = logging.getLogger("visor.engine")
@@ -47,7 +50,8 @@ def _sentence(text):
 
 
 class Engine:
-    def __init__(self, store, navdata, sector_idle_s=None):
+    def __init__(self, store, navdata, sector_idle_s=None, coach_store=None, context="live", exercise=None):
+        """context: live (the shared simulation) | tutorial | exercise (a trainee's sandbox)."""
         self.store = store
         self.navdata = navdata
         self.lock = threading.RLock()
@@ -55,8 +59,12 @@ class Engine:
         self.speed = 1.0
         self.paused = False
         self.lockstep = False
+        self.context = context
         self.control = Control(idle_s=sector_idle_s)
-        self.ai_prefs = {}             # username -> {"mode", "agent"} for that user's own sectors
+        self.ai_prefs = {}             # username -> {"agent"}: which AI advises / demonstrates
+        self.coach = Coach(self, coach_store, context, exercise)
+        self.tick_hooks = []           # f(engine) after every step, e.g. an exercise's timeline
+        self.frame_extra = {}          # extra keys for every viewer's frame (e.g. exercise status)
         self._agents = {}
         self._agent_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="agent")
         self._frame_cache = {}
@@ -75,7 +83,7 @@ class Engine:
             now = time.time()
             if mode == "replay":
                 if first is None:
-                    raise ValueError("no recorded data yet")
+                    raise Invalid("no_data")
                 start_t = float(start_t if start_t is not None else first)
                 start_t = max(first, min(start_t, last or now))
             else:
@@ -108,6 +116,7 @@ class Engine:
             self._los_ids = set()
             self._last_conflict_scan = -1e9
             self._last_decision_scan = -1e9
+            self.coach.reset()                 # a new scenario: open situations no longer exist
             self._spawn()
             self._event("system", "%s scenario started at %s UTC with %d aircraft" % (
                 mode.upper(), time.strftime("%H:%M:%S", time.gmtime(start_t)), len(self.aircraft)))
@@ -166,6 +175,7 @@ class Engine:
             if dp.status == "open":
                 dp.holders = self._holders_for(dp.sector_ids)
                 dp.suggestion = None
+                self.coach.sync(dp)                 # journals follow the change of controller
 
     def _holders_for(self, sector_ids):
         return sorted({h for h in (self.control.holder(s) for s in sector_ids) if h})
@@ -176,37 +186,59 @@ class Engine:
                         sectors=[sid])
             self._reassign_open_decisions()
 
-    # ------------------------------------------------------------------ AI preferences
+    # ------------------------------------------------------------------ AI preferences & coach
     def agent(self, name):
         if name not in self._agents:
             self._agents[name] = agents.create(name)
         return self._agents[name]
 
+    # the AI mode follows the coach level: it advises at Advise and acts at Demonstrate
+    _LEVEL_MODE = {"advise": "advisory", "demonstrate": "autonomous"}
+    _MODE_LEVEL = {"advisory": "advise", "autonomous": "demonstrate", "off": "off"}
+
     def ai_pref(self, username):
-        return self.ai_prefs.get(username, {"mode": "off", "agent": "rules"})
+        pref = self.ai_prefs.get(username, {})
+        mode = self._LEVEL_MODE.get(self.coach.level_of(username), "off") if username else "off"
+        return {"mode": mode, "agent": pref.get("agent", "rules")}
+
+    def _forget_suggestions(self, username):
+        for dp in self.decisions.values():
+            if "human:" + username in dp.holders:
+                dp.suggestion = None
+                dp.pending_agent = False
 
     def set_ai(self, username, mode=None, agent=None):
-        """The user's own AI assistance for decision points in their sectors."""
+        """The user's own AI assistance for decision points in their sectors (kept for API
+        compatibility: modes map onto coach levels off / advise / demonstrate)."""
         with self.lock:
-            pref = dict(self.ai_pref(username))
             if agent:
                 self.agent(agent)                     # validates
-                pref["agent"] = agent
+                self.ai_prefs[username] = dict(self.ai_prefs.get(username, {}), agent=agent)
             if mode:
                 if mode not in AI_MODES:
-                    raise ValueError("mode must be one of %s" % (AI_MODES,))
-                pref["mode"] = mode
-            self.ai_prefs[username] = pref
-            for dp in self.decisions.values():
-                if "human:" + username in dp.holders:
-                    dp.suggestion = None
-                    dp.pending_agent = False
+                    raise Invalid("ai_mode_invalid", modes=", ".join(AI_MODES))
+                self.coach.set_level(username, self._MODE_LEVEL[mode])
+            self._forget_suggestions(username)
             self._build_frame()
             return self.ai_status(username)
+
+    def set_coach(self, username, level):
+        with self.lock:
+            self.coach.set_level(username, level)
+            self._forget_suggestions(username)
+            self._build_frame()
+            return self.coach.view(username)
+
+    def hint(self, username, dp_id):
+        with self.lock:
+            res = self.coach.hint(username, dp_id)
+            self._build_frame()
+            return res
 
     def ai_status(self, username=None):
         pref = self.ai_pref(username) if username else {"mode": "off", "agent": "rules"}
         return {"mode": pref["mode"], "agent": self.agent(pref["agent"]).status(),
+                "coach": self.coach.level_of(username) if username else None,
                 "available_agents": sorted(agents.REGISTRY)}
 
     # ------------------------------------------------------------------ run loop
@@ -238,6 +270,7 @@ class Engine:
             self._decision_by_key = {}
             self._cooldown = {}
             self._los_ids = set()
+            self.coach.reset()
             self._event("system", "Nobody online: simulation asleep to save resources")
             self._build_frame()
             return True
@@ -250,6 +283,48 @@ class Engine:
             self.reset("live")
             self.start()
             return True
+
+    # ------------------------------------------------------------------ rewind (sandboxes)
+    def snapshot(self):
+        """Everything needed to continue the simulation from now, later (see restore)."""
+        with self.lock:
+            return {
+                "t": self.t,
+                "aircraft": {k: a.clone(keep_rng=True) for k, a in self.aircraft.items()},
+                # plans are shared with the aircraft; exercises may rewrite their points later
+                "plans": {k: (p, p.spawned, p.done, p.terminated_at, list(p.points), list(p.times))
+                          for k, p in self.loader.plans.items()},
+                "loaded_until": self.loader.loaded_until, "snap_times": list(self.loader.snap_times),
+                "next_load": self._next_load, "rng": self.rng.getstate(),
+                "scores": copy.deepcopy(self.scores), "los_ids": set(self._los_ids),
+                "conflict_seen": copy.deepcopy(self._conflict_seen), "cooldown": dict(self._cooldown),
+            }
+
+    def restore(self, snap):
+        """Go back to a snapshot. Open decisions and alerts are rebuilt by the next scans."""
+        with self.lock:
+            self.t = snap["t"]
+            self.aircraft = {k: a.clone(keep_rng=True) for k, a in snap["aircraft"].items()}
+            self.loader.plans = {}
+            for k, (plan, spawned, done, terminated_at, points, times) in snap["plans"].items():
+                plan.spawned, plan.done, plan.terminated_at = spawned, done, terminated_at
+                plan.points, plan.times = list(points), list(times)
+                self.loader.plans[k] = plan
+            self.loader.loaded_until = snap["loaded_until"]
+            self.loader.snap_times = list(snap["snap_times"])
+            self._next_load = snap["next_load"]
+            self.rng.setstate(snap["rng"])
+            self.scores = copy.deepcopy(snap["scores"])
+            self._los_ids = set(snap["los_ids"])
+            self._conflict_seen = copy.deepcopy(snap["conflict_seen"])
+            self._cooldown = dict(snap["cooldown"])
+            self.conflicts, self._conflict_keys = [], {}
+            self.decisions, self._decision_by_key = {}, {}
+            self.coach.reset()
+            self._last_conflict_scan = self._last_decision_scan = -1e9
+            self._event("system", "Rewound to %s UTC" % time.strftime("%H:%M:%S", time.gmtime(self.t)))
+            self._scan_conflicts()
+            self._build_frame()
 
     def _loop(self, generation):
         while self._running and generation == self._generation:
@@ -291,6 +366,8 @@ class Engine:
                 self._update_sectors()
                 self._pilot_requests()
                 self._update_decisions()
+            for hook in self.tick_hooks:
+                hook(self)
 
     # ------------------------------------------------------------------ traffic life-cycle
     def _spawn(self):
@@ -377,6 +454,16 @@ class Engine:
                     sectors.BY_ID[sid]["name"], ac.callsign, int(round(ac.alt / 1000.0)) * 10),
                     speaker="PILOT", callsign=ac.callsign, sectors=[sid])
 
+    def pilot_request_level(self, ac, fl):
+        """The crew of ac asks for flight level fl: a decision point and a radio call."""
+        ac.last_request_t = self.t
+        dp = decisions.level_request_decision(self, ac, fl, self.t)
+        self._add_decision(dp, ("req", ac.id), [ac.sector_id])
+        self._event("radio", "%s, request %s flight level %03d" % (
+            ac.callsign, "climb" if fl * 100 > ac.alt else "descent", fl),
+            speaker="PILOT", callsign=ac.callsign, sectors=[ac.sector_id])
+        return dp
+
     def _pilot_requests(self):
         t = self.t
         open_req = {sid for dp in self.decisions.values()
@@ -392,12 +479,7 @@ class Engine:
                     fl = min(int(round(planned / 1000.0)) * 10, ac.perf["ceiling"] // 100)
                     if abs(fl * 100 - ac.cleared_alt) < 1000:
                         continue
-                    ac.last_request_t = t
-                    dp = decisions.level_request_decision(self, ac, fl, t)
-                    self._add_decision(dp, ("req", ac.id), [ac.sector_id])
-                    self._event("radio", "%s, request %s flight level %03d" % (
-                        ac.callsign, "climb" if fl * 100 > ac.alt else "descent", fl),
-                        speaker="PILOT", callsign=ac.callsign, sectors=[ac.sector_id])
+                    self.pilot_request_level(ac, fl)
                     continue
             if ac.lat_mode == "HDG" and ac.hdg_since is not None and t - ac.hdg_since > 420:
                 ac.last_request_t = t
@@ -451,6 +533,7 @@ class Engine:
             del seen[key]
         self.conflicts = found
         self._conflict_keys = keys
+        self.coach.on_scan()
 
     # ------------------------------------------------------------------ decisions
     def _close(self, dp, status, by=None):
@@ -464,6 +547,7 @@ class Engine:
         dp.holders = self._holders_for(dp.sector_ids)
         self.decisions[dp.id] = dp
         self._decision_by_key[key] = dp.id
+        self.coach.on_decision(dp)
 
     def _credit(self, dp, counter):
         for h in dp.holders:
@@ -500,9 +584,11 @@ class Engine:
                         c = self._conflict_keys[(dp.key[1], dp.key[2])]
                         fresh = decisions.conflict_decision(self, subj[0], subj[1], c, t)
                         dp.state, dp.options, dp.updated_t = fresh.state, fresh.options, t
+                        dp.best = fresh.best
                         dp.sector_ids = c["sectors"]
                         dp.holders = self._holders_for(dp.sector_ids)
                         dp.suggestion = None
+                        self.coach.on_refresh(dp)
                         refreshed += 1
                 elif dp.kind == "level_request":
                     ac = subj[0]
@@ -546,7 +632,7 @@ class Engine:
             if h.startswith("ai:"):
                 return self.agent(h[3:]), "autonomous"
         for h in dp.holders:
-            pref = self.ai_pref(h[6:])
+            pref = self.ai_pref(h[6:])                # follows the coach level (advise / demonstrate)
             if pref["mode"] != "off":
                 return self.agent(pref["agent"]), pref["mode"]
         return None
@@ -573,7 +659,7 @@ class Engine:
             else:
                 dp.suggestion = dict(answer, agent=agent.name)
 
-    def answer_decision(self, dp_id, answer, by, actor=None):
+    def answer_decision(self, dp_id, answer, by, actor=None, enforce_level=True):
         """Execute the option chosen in answer["action"].
 
         actor: holder key of the user answering (API calls). They must be responsible for the
@@ -582,24 +668,35 @@ class Engine:
         with self.lock:
             dp = self.decisions.get(dp_id)
             if dp is None:
-                raise ValueError("unknown decision %s" % dp_id)
+                raise Invalid("unknown_decision", id=dp_id)
             if actor is not None and dp.holders and actor not in dp.holders:
-                raise PermissionError("%s belongs to %s" % (dp.id, ", ".join(display(h) for h in dp.holders)))
+                raise Denied("decision_belongs", id=dp.id, holders=", ".join(display(h) for h in dp.holders))
             if dp.status != "open":
-                raise ValueError("decision %s is %s" % (dp_id, dp.status))
+                raise Invalid("decision_closed", id=dp_id)
             opt = next((o for o in dp.options if o["id"] == answer.get("action")), None)
             if opt is None:
-                raise ValueError("unknown option %r" % answer.get("action"))
+                raise Invalid("unknown_option", option=answer.get("action"))
+            if enforce_level and actor is not None and actor.startswith("human:") and not by.startswith("ai:"):
+                reveal = self.coach.reveal_for(actor[6:], dp)
+                if reveal is not None and opt["id"] not in reveal:
+                    raise Denied("option_hidden")
             results = []
-            for ac_id, clr in opt["clearances"]:
-                ac = self.aircraft.get(ac_id)
-                if ac is not None:
-                    results.append(self._issue(ac, [Clearance(clr.kind, clr.value, clr.direction)], by, actor))
+            self.coach.via = "decision"
+            try:
+                for ac_id, clr in opt["clearances"]:
+                    ac = self.aircraft.get(ac_id)
+                    if ac is not None:
+                        results.append(self._issue(ac, [Clearance(clr.kind, clr.value, clr.direction)], by, actor))
+            finally:
+                self.coach.via = None
+            self.coach.on_answer(dp, opt, by, actor)
             dp.status, dp.answer, dp.answered_by, dp.updated_t = "executed", answer, by, self.t
             if by.startswith("ai:"):
                 self._credit(dp, "decisions_ai")
                 self._event("ai", "%s → %s (confidence %s)" % (
                     dp.id, opt["label"], answer.get("confidence", "?")), speaker="AI", sectors=dp.sector_ids)
+                if actor is None:
+                    self.coach.narrate(dp, opt)
             if dp.kind == "conflict":
                 self._cooldown[dp.key] = self.t + 90
             elif dp.kind in ("level_request", "route_request") and opt["clearances"]:
@@ -617,7 +714,7 @@ class Engine:
             dp = self.decisions.get(dp_id)
             if dp and dp.status == "open":
                 if actor is not None and dp.holders and actor not in dp.holders:
-                    raise PermissionError("%s belongs to %s" % (dp.id, ", ".join(display(h) for h in dp.holders)))
+                    raise Denied("decision_belongs", id=dp.id, holders=", ".join(display(h) for h in dp.holders))
                 dp.status, dp.updated_t = "dismissed", self.t
                 if dp.kind == "conflict":
                     self._cooldown[dp.key] = self.t + 120
@@ -647,6 +744,7 @@ class Engine:
             self._event("radio", _sentence(readback(ac.callsign, accepted)),
                         speaker="PILOT", callsign=ac.callsign, to=issuer, by=actor, sectors=tag)
             self.scores[issuer]["clearances"] += len(accepted)
+            self.coach.on_clearance(ac, accepted, issuer, actor)
         for r in replies:
             self._event("radio", _sentence(r), speaker="PILOT", callsign=ac.callsign, to=issuer, by=actor,
                         sectors=tag)
@@ -657,14 +755,14 @@ class Engine:
         """Only the holder of the aircraft's sector may instruct it; unmanned airspace is open."""
         h = self.holder_of(ac)
         if actor is not None and h is not None and h != actor:
-            raise PermissionError("%s is in %s, controlled by %s" % (
-                ac.callsign, sectors.BY_ID[ac.sector_id]["name"], display(h)))
+            raise Denied("not_your_aircraft", callsign=ac.callsign, sector=sectors.BY_ID[ac.sector_id]["name"],
+                         holder=display(h))
 
     def issue(self, ident, clearances, issuer="human", actor=None):
         with self.lock:
             ac = self.find(ident)
             if ac is None:
-                raise ValueError("no aircraft %s" % ident)
+                raise Invalid("no_aircraft", ident=ident)
             self.check_authority(ac, actor)
             for c in clearances:
                 if c.kind != "LEVEL":
@@ -679,12 +777,18 @@ class Engine:
 
     # ------------------------------------------------------------------ events & visibility
     def _event(self, kind, text, speaker="SYSTEM", callsign=None, issuer=None, level=None,
-               sectors=None, to=None, by=None):
-        """by: account (holder key) that caused the event, e.g. the user behind an external agent."""
+               sectors=None, to=None, by=None, msg=None, grade=None):
+        """by: account (holder key) that caused the event, e.g. the user behind an external agent.
+        msg: {"key", "p"} of a coach message, so the UI can show it in the user's language."""
         self.event_seq += 1
-        self.events.append({"seq": self.event_seq, "t": round(self.t, 1), "kind": kind,
-                            "speaker": speaker, "callsign": callsign, "issuer": issuer, "to": to, "by": by,
-                            "level": level, "text": text, "sectors": [s for s in (sectors or []) if s]})
+        e = {"seq": self.event_seq, "t": round(self.t, 1), "kind": kind,
+             "speaker": speaker, "callsign": callsign, "issuer": issuer, "to": to, "by": by,
+             "level": level, "text": text, "sectors": [s for s in (sectors or []) if s]}
+        if msg is not None:
+            e["msg"] = {"key": msg["key"], "p": msg["p"]}
+        if grade is not None:
+            e["grade"] = grade
+        self.events.append(e)
 
     @staticmethod
     def _visible_event(e, viewer, mine):
@@ -704,6 +808,12 @@ class Engine:
 
     def visible_conflicts(self, viewer):
         return [c for c in self.conflicts if viewer is None or viewer in c.get("holders", ())]
+
+    def reveal(self, viewer, dp):
+        """Which of dp's options the viewer may see (None = all), from their coach level."""
+        if viewer and viewer.startswith("human:"):
+            return self.coach.reveal_for(viewer[6:], dp)
+        return None
 
     def visible_decisions(self, viewer, open_only=False):
         return [dp for dp in self.decisions.values()
@@ -743,16 +853,18 @@ class Engine:
             ])
         holders = self.control.snapshot()
         first, last, nsnap = self.store.coverage()
+        self.coach.record(ac_rows, self.conflicts)
         shared = {
             "type": "frame", "seq": self.frame_seq + 1, "t": self.t, "mode": self.mode,
             "speed": self.speed, "paused": self.paused, "lockstep": self.lockstep,
-            "asleep": self.hibernating,
+            "asleep": self.hibernating, "context": self.context,
             "coverage": {"first": first, "last": last, "snapshots": nsnap},
             "ac": ac_rows,
             "sectorization": [[sid, holders.get(sid), counts.get(sid, 0)] for sid in sectors.BY_ID],
             "points": {h: self.score_of(h)["points"] for h in set(holders.values())},
             "event_seq": self.event_seq,
         }
+        shared.update(self.frame_extra)
         self.frame_seq += 1
         self._shared = json.dumps(shared, separators=(",", ":"))
         self._frame_cache = {}
@@ -770,7 +882,10 @@ class Engine:
                 "score": self.score_of(viewer) if viewer else {},
                 "conflicts": [[c["a"], c["b"], c["kind"], c["t_to"], c["h_nm"], c["v_ft"], c.get("sectors", [])]
                               for c in self.visible_conflicts(viewer)],
-                "decisions": [dp.to_dict() for dp in self.visible_decisions(viewer)],
+                # without the decision assistant (Evaluate, Hints) a trainee only sees the options
+                # a hint has revealed
+                "decisions": [dp.to_dict(self.reveal(viewer, dp)) for dp in self.visible_decisions(viewer)],
+                "coach": self.coach.view(username) if username else None,
             }
             frame = self._shared[:-1] + "," + json.dumps(personal, separators=(",", ":"))[1:]
             self._frame_cache[viewer] = frame
@@ -779,6 +894,72 @@ class Engine:
     @property
     def frame(self):
         return self.frame_for(None)
+
+    # ------------------------------------------------------------------ what-if
+    def _whatif_view(self, pred, subjects, base=None):
+        keep = {a.id for a in subjects} | set(pred["conflicts_with"])
+        if pred["cpa"]:
+            keep |= {pred["cpa"]["a"], pred["cpa"]["b"]}
+        tracks = {k: v for k, v in pred["tracks"].items() if k in keep}
+        summary = ("min_h_nm", "min_v_ft", "los", "first_los_s", "los_duration_s", "cpa")
+        out = {
+            "t": self.t, "step_s": pred["step_s"], "subjects": [a.id for a in subjects],
+            "tracks": tracks, "names": {k: self.aircraft[k].callsign for k in tracks if k in self.aircraft},
+            "cpa": pred["cpa"], "cpa_at": pred["cpa_at"],
+            "predicted": {k: pred[k] for k in summary},
+            "conflicts_with": [self.aircraft[i].callsign for i in pred["conflicts_with"] if i in self.aircraft],
+            "minima": {"h_nm": conflicts.sep_h(subjects[0].alt, subjects[0].alt), "v_ft": config.SEP_V_FT},
+        }
+        if base is not None:
+            out["baseline"] = {k: base[k] for k in summary}
+        return out
+
+    def probe(self, ident, clearances, actor=None):
+        """Predicted outcome of clearances for an aircraft, with 3D tracks, without issuing them.
+        The aircraft it is in conflict with are flown too, and so is "no action" for comparison."""
+        with self.lock:
+            ac = self.find(ident)
+            if ac is None:
+                raise Invalid("no_aircraft", ident=ident)
+            resolved = []
+            for c in clearances:
+                if c.kind == "LEVEL":
+                    c = Clearance("CLIMB" if c.value * 100 > ac.alt else "DESCEND", c.value)
+                c.validate()
+                if c.kind == "DIRECT" and self.navdata.find(c.value, ac.lat, ac.lon) is None:
+                    raise Invalid("unknown_fix", fix=c.value)
+                resolved.append((ac.id, c))
+            others = {x for c in self.conflicts if ac.id in (c["a"], c["b"]) for x in (c["a"], c["b"])}
+            subjects = [ac] + [self.aircraft[x] for x in sorted(others) if x != ac.id and x in self.aircraft]
+            pred = decisions.predict(self, subjects, resolved, self.t, tracks=True)
+            base = decisions.predict(self, subjects, [], self.t)
+            out = self._whatif_view(pred, subjects, base)
+            out["clearances"] = [c.phrase() for _, c in resolved]
+            out["aircraft"] = ac.callsign
+            return out
+
+    def whatif(self, dp_id, option_id, viewer=None, enforce_level=True):
+        """3D prediction of one option of a decision point (the Decisions list's hover view)."""
+        with self.lock:
+            dp = self.decisions.get(dp_id)
+            if dp is None:
+                raise Invalid("unknown_decision", id=dp_id)
+            if viewer is not None and dp.holders and viewer not in dp.holders:
+                raise Denied("decision_belongs", id=dp.id, holders=", ".join(display(h) for h in dp.holders))
+            username = viewer[6:] if viewer and viewer.startswith("human:") else None
+            reveal = self.coach.reveal_for(username, dp) if username and enforce_level else None
+            if reveal is not None and option_id not in reveal:
+                raise Denied("option_hidden")
+            opt = next((o for o in dp.options if o["id"] == option_id), None)
+            if opt is None:
+                raise Invalid("unknown_option", option=option_id)
+            subjects = [self.aircraft[i] for i in dp.subject_ids if i in self.aircraft]
+            if not subjects:
+                raise Invalid("aircraft_left")
+            pred = decisions.predict(self, subjects, opt["clearances"], self.t, tracks=True)
+            out = self._whatif_view(pred, subjects)
+            out.update(decision=dp.id, option=opt["id"], label=opt["label"], why=opt.get("why"))
+            return out
 
     # ------------------------------------------------------------------ agent views
     def aircraft_detail(self, ident, viewer=None):
@@ -811,7 +992,7 @@ class Engine:
                 "fixes": self.navdata.nearby(ac.lat, ac.lon, 250, limit=30),
             }
 
-    def observation(self, viewer=None, mine_only=False):
+    def observation(self, viewer=None, mine_only=False, hide=True):
         """Typed state for agents: all traffic (with sector and holder), plus the conflicts and
         decision points the viewer is responsible for (everything when viewer is None)."""
         with self.lock:
@@ -832,7 +1013,8 @@ class Engine:
                 "sectors": self.control.snapshot(),
                 "aircraft": acs,
                 "conflicts": self.visible_conflicts(viewer),
-                "decisions": [dp.to_dict() for dp in self.visible_decisions(viewer, open_only=True)],
+                "decisions": [dp.to_dict(self.reveal(viewer, dp) if hide else None)
+                              for dp in self.visible_decisions(viewer, open_only=True)],
                 "score": self.score_of(viewer) if viewer else {},
                 "event_seq": self.event_seq,
             }

@@ -1,5 +1,6 @@
 import { api, setContext } from './net.js';
 import { F } from './traffic.js';
+import { t } from './i18n.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -18,173 +19,99 @@ const narrow = () => window.matchMedia('(max-width: 900px)').matches;
  *              skipped or the tutorial was resumed in a fresh sandbox
  *   skip(t)    applies the lesson's outcome when the trainee skips it
  */
+// Where things are, depending on the layout: the lists are a tab on the left or a sheet behind ☰;
+// secondary top-bar controls sit in the ⋯ panel on compact screens.
+const list = (tab) => t(narrow() ? 'tut.where.sheet' : 'tut.where.tab', { tab: t(`tabs.${tab}`) });
+const bar = () => t(compact() ? 'tut.where.panel' : 'tut.where.topBar');
+
 const STEPS = [
+  { id: 'welcome', info: true },
   {
-    title: 'Welcome to your practice sector',
-    body: `<p>As an air traffic controller your job is to keep every aircraft in your sector
-      <b>safely separated</b> (at least <b>5 NM</b> horizontally or <b>1000 ft</b> vertically) while
-      getting them where they want to go <b>efficiently</b>.</p>
-      <p>This tutorial runs in a <b>private training sector</b>: the traffic is scripted and nothing you do
-      affects other controllers. It takes about 10–15 minutes. You can leave at any time and resume later.</p>`,
-    info: true,
+    id: 'scope',
+    check: (x) => { const v = x.app.cameraInfo(); return v.distance < 900 && v.lat > 42 && v.lat < 47 && v.lon > 1 && v.lon < 12; },
+    showMe: (x) => x.app.flyTo(44.6, 6.6, 700),
   },
   {
-    title: 'Find your way around the scope',
-    body: '<p>The scope is a 3D map of Europe. Aircraft carry a <b>data block</b> (label) with their details.</p>',
-    goal: 'Zoom in on the Alps region (around Marseille, Geneva and Turin) so the training traffic fills your screen.',
-    how: `<ul><li><b>Pan</b>: drag with the left mouse button (one finger on touch screens).</li>
-      <li><b>Zoom</b>: mouse wheel (pinch on touch screens).</li>
-      <li><b>Rotate / tilt</b>: drag with the right mouse button (two fingers on touch screens).</li></ul>`,
-    check: (t) => { const v = t.app.cameraInfo(); return v.distance < 900 && v.lat > 42 && v.lat < 47 && v.lon > 1 && v.lon < 12; },
-    showMe: (t) => t.app.flyTo(44.6, 6.6, 700),
-  },
-  {
-    title: 'Take your sector',
-    body: `<p>Airspace is divided into <b>sectors</b>. Each region is also split <b>vertically</b> into layers:
-      <b>L</b>ower (up to FL245), <b>U</b>pper (FL245–345) and <b>H</b>igh (above FL345). A controller is responsible for
-      every aircraft inside the sectors they hold; nobody else can clear them.</p>
-      <p>You can see everyone's sectorization: each controller has a colour, the AI is violet, free sectors are faint outlines.</p>`,
-    goal: 'Take Alps Upper (ALP-U).',
-    how: () => `<p>Open the <b>Sectors</b> ${narrow() ? 'list with the <b>☰</b> button' : 'tab on the left'}
-      (or press <b>My sectors</b>${compact() ? ' in the <b>⋯</b> panel' : ' in the top bar'}), find <b>Alps</b> and press
-      <b>Take</b> on the <b>U</b> layer.</p>`,
+    id: 'sector',
+    how: () => t('tut.sector.how', { list: list('sectors'), bar: bar() }),
     target: `[data-sact="take"][data-sid="${SECTOR}"]`,
-    check: (t) => (t.frame?.me?.sectors ?? []).includes(SECTOR),
-    skip: (t) => api(`/api/sectors/${SECTOR}/take`, {}),
-    prepare: (t) => ((t.frame?.me?.sectors ?? []).includes(SECTOR) ? null : api(`/api/sectors/${SECTOR}/take`, {})),
+    check: (x) => (x.frame?.me?.sectors ?? []).includes(SECTOR),
+    skip: () => api(`/api/sectors/${SECTOR}/take`, {}),
+    prepare: (x) => ((x.frame?.me?.sectors ?? []).includes(SECTOR) ? null : api(`/api/sectors/${SECTOR}/take`, {})),
   },
   {
-    title: 'Read a data block',
-    body: `<p>Each data block shows, line by line:</p>
-      <ul><li><b>Callsign</b> (e.g. <code>TRN303</code>), plus <b>H</b> for heavy aircraft.</li>
-      <li><b>Flight level</b> (<code>290</code> = 29,000 ft), a trend arrow ↑/↓ when climbing or descending, then the <b>cleared level</b>.</li>
-      <li><b>Ground speed</b> in knots and any lateral instruction (heading or direct-to).</li></ul>
-      <p>The line ahead of each aircraft is its <b>speed vector</b>: where it will be in 2 minutes.</p>`,
-    goal: 'Select TRN303, your practice aircraft.',
-    how: '<p>Click (tap) the aircraft or its data block. Its <b>flight strip</b> opens with all its details and the clearance controls.</p>',
-    check: (t) => t.app.selectedId === TRN303,
-    showMe: (t) => t.app.select(TRN303, true),
+    id: 'datablock',
+    check: (x) => x.app.selectedId === TRN303,
+    showMe: (x) => x.app.select(TRN303, true),
   },
   {
-    title: 'Give a heading',
-    body: `<p>Clearances are instructions to a pilot. You can type them on the <b>command line</b> using ATC shorthand.
-      The pilot reads the clearance back on the radio and executes it after a few seconds.</p>`,
-    goal: 'Turn TRN303 right by 20 degrees.',
-    how: `<p>Click the command line (or press <kbd>/</kbd>) and type <code>TRN303 TR 20D</code>, then Enter.
-      With TRN303 selected you can omit the callsign: <code>TR 20D</code>.</p>
-      <p class="dim">Other forms: <code>TL 270</code> turn left heading 270 · <code>H 090</code> fly heading 090.</p>`,
+    id: 'heading',
     target: '#cmd',
-    check: (t) => { const r = t.rec(TRN303); return !!r && (r.ahdg != null || r.lateral?.startsWith('H')); },
+    check: (x) => { const r = x.rec(TRN303); return !!r && (r.ahdg != null || r.lateral?.startsWith('H')); },
   },
   {
-    title: 'Proceed direct to a fix',
-    body: '<p>Instead of vectoring, you can send an aircraft straight to a <b>navaid</b> or <b>airport</b>. After passing it, the aircraft rejoins its route.</p>',
-    goal: 'Clear TRN303 direct to a nearby navaid.',
-    how: `<p>In TRN303's flight strip, pick a fix from the <b>Direct</b> list and press <b>DCT</b>.
-      Or type <code>TRN303 DCT</code> followed by the fix identifier.</p>`,
+    id: 'direct',
     target: '#c-dct',
-    check: (t) => !!t.rec(TRN303)?.dct,
-    enter: (t) => { if (t.app.selectedId !== TRN303) t.app.select(TRN303); },
+    check: (x) => !!x.rec(TRN303)?.dct,
+    enter: (x) => { if (x.app.selectedId !== TRN303) x.app.select(TRN303); },
   },
   {
-    title: 'Resume own navigation',
-    body: '<p>When you no longer need an aircraft off its route, let the crew continue on their own.</p>',
-    goal: 'Tell TRN303 to resume own navigation.',
-    how: '<p>Press <b>Resume own nav</b> in the flight strip, or type <code>TRN303 RON</code>.</p>',
+    id: 'resume',
     target: '#c-ron',
-    check: (t) => { const r = t.rec(TRN303); return !!r && r.dct == null && r.ahdg == null && (r.flags & F.HUMAN); },
-    enter: (t) => { if (t.app.selectedId !== TRN303) t.app.select(TRN303); },
+    check: (x) => { const r = x.rec(TRN303); return !!r && r.dct == null && r.ahdg == null && (r.flags & F.HUMAN); },
+    enter: (x) => { if (x.app.selectedId !== TRN303) x.app.select(TRN303); },
   },
   {
-    title: 'Change level',
-    body: '<p>Vertical clearances are the most common tool: climbing or descending an aircraft by 1000 ft is often enough to keep it clear of others.</p>',
-    goal: 'Climb TRN303 to flight level 330.',
-    how: `<p>In the flight strip set <b>Level</b> to <code>330</code> (use + / −) and press <b>Climb</b>.
-      Or type <code>TRN303 C 330</code>. It stays inside your sector: Alps Upper goes up to FL345.</p>`,
+    id: 'level',
     target: '#c-fl',
-    check: (t) => t.rec(TRN303)?.cfl === 330,
-    enter: (t) => { if (t.app.selectedId !== TRN303) t.app.select(TRN303); },
+    check: (x) => x.rec(TRN303)?.cfl === 330,
+    enter: (x) => { if (x.app.selectedId !== TRN303) x.app.select(TRN303); },
   },
   {
-    title: 'Spot a conflict',
-    body: `<p>Two new aircraft, <b>TRN101</b> and <b>TRN202</b>, are flying towards each other at the same level.
-      The <b>short-term conflict alert (STCA)</b> predicts losses of separation up to 2 minutes ahead:
-      the aircraft turn <b style="color:var(--warn)">amber</b> and the alert appears in the <b>Alerts</b> list.</p>`,
-    goal: 'Wait for the STCA between TRN101 and TRN202, then select one of them.',
-    how: () => `<p>Open the <b>Alerts</b> ${narrow() ? 'list with the <b>☰</b> button' : 'tab on the left'}
-      and click the alert. It appears in about 2 minutes. To wait less, set <b>2×</b> or <b>4×</b> speed${compact() ? ' (in the <b>⋯</b> panel)' : ''}.</p>`,
+    id: 'spot',
+    how: () => t('tut.spot.how', { list: list('alerts'), speed: compact() ? t('tut.where.inPanel') : '' }),
     target: () => (narrow() ? '#btn-lists' : '[data-tab=alerts]'),
-    check: (t) => t.pairInConflict() && PAIR.includes(t.app.selectedId),
-    enter: (t) => {
-      if (!t.pairPresent()) api('/api/tutorial/scenario', { event: 'conflict' }).catch(() => {});
-      t.app.flyTo(44.3, 7.3, 650);
+    check: (x) => x.pairInConflict() && PAIR.includes(x.app.selectedId),
+    enter: (x) => {
+      if (!x.pairPresent()) api('/api/tutorial/scenario', { event: 'conflict' }).catch(() => {});
+      x.app.flyTo(44.3, 7.3, 650);
     },
-    prepare: (t) => (t.pairPresent() ? null : api('/api/tutorial/scenario', { event: 'conflict' })),
+    prepare: (x) => (x.pairPresent() ? null : api('/api/tutorial/scenario', { event: 'conflict' })),
   },
   {
-    title: 'Resolve the conflict',
-    body: `<p>Separate them before they get closer than 5 NM at the same level.
-      A <b>vertical</b> solution is usually the simplest: move one of them 1000 ft up or down.</p>`,
-    goal: 'Give TRN101 or TRN202 a new level and keep them separated until they have passed.',
-    how: `<p>Select one and type e.g. <code>TRN101 C 320</code> or <code>TRN202 D 300</code>.
-      The <b>Decisions</b> tab also offers ready-made options, each with its predicted outcome.
-      The goal is reached once they have passed each other <b>without</b> a loss of separation.</p>`,
+    id: 'resolve',
     target: '#cmd',
-    check: (t) => {
-      const cleared = PAIR.some((id) => { const r = t.rec(id); return r && (r.cfl != null || r.ahdg != null); });
-      if (t.pairInConflict()) t.state.sawConflict = true;
-      return t.state.sawConflict && cleared && !t.pairInConflict() && t.pairPassed()
-        && (t.frame?.score?.los ?? 0) === 0;
+    check: (x) => {
+      const cleared = PAIR.some((id) => { const r = x.rec(id); return r && (r.cfl != null || r.ahdg != null); });
+      if (x.pairInConflict()) x.state.sawConflict = true;
+      return x.state.sawConflict && cleared && !x.pairInConflict() && x.pairPassed()
+        && (x.frame?.score?.los ?? 0) === 0;
     },
-    failed: (t) => ((t.frame?.score?.los ?? 0) > 0
-      ? 'Separation was lost. Press <b>Replay situation</b> to try again: act as soon as the STCA appears.' : null),
-    retry: (t) => { t.state.sawConflict = false; return api('/api/tutorial/scenario', { event: 'conflict' }); },
-    prepare: (t) => (t.pairPresent() ? null : api('/api/tutorial/scenario', { event: 'conflict' })),
+    failed: (x) => ((x.frame?.score?.los ?? 0) > 0 ? t('tut.resolve.failed') : null),
+    retry: (x) => { x.state.sawConflict = false; return api('/api/tutorial/scenario', { event: 'conflict' }); },
+    prepare: (x) => (x.pairPresent() ? null : api('/api/tutorial/scenario', { event: 'conflict' })),
   },
   {
-    title: 'Get help from the decision assistant',
-    body: `<p>For every conflict and pilot request the simulator builds a <b>decision point</b>: candidate clearances,
-      each tested by flying the traffic a few minutes ahead (✓ separated, ✗ loss of separation).</p>
-      <p>An <b>AI</b> can recommend (<b>Advisory</b>) or act on its own (<b>Autonomous</b>). This is the interface a decision-making AI such as Jev plugs into.</p>`,
-    goal: 'Switch the AI to Advisory mode.',
-    how: () => `<p>Set <b>AI</b> to <b>Advisory</b>${compact() ? ' in the <b>⋯</b> panel' : ' in the top bar'}.
-      From now on its suggestion is highlighted in the <b>Decisions</b> list; you still decide with <b>Accept</b>.</p>`,
-    target: '#ai-mode',
-    check: (t) => t.frame?.ai?.mode === 'advisory',
+    id: 'coach',
+    how: () => t('tut.coach.how', { bar: bar() }),
+    target: '#coach-level',
+    check: (x) => x.frame?.coach?.level === 'advise',
   },
   {
-    title: 'Answer a pilot request',
-    body: `<p>Pilots ask for what they need. TRN303 is at FL330, but its flight plan is at FL290,
-      so the crew will soon request a descent. Unanswered requests expire and cost points.</p>`,
-    goal: 'Grant TRN303’s request to descend to FL290.',
-    how: () => `<p>When “TRN303, request descent FL290” appears on the radio, open <b>Decisions</b>
-      ${narrow() ? '(☰ button)' : 'on the left'} and press <b>Issue</b> on the approve option (or <b>Accept</b> the AI suggestion).
-      You can also type <code>TRN303 D 290</code>. Speed up time if you are waiting.</p>`,
+    id: 'request',
+    how: () => t('tut.request.how', { list: list('decisions') }),
     target: () => (narrow() ? '#btn-lists' : '[data-tab=decisions]'),
-    check: (t) => t.rec(TRN303)?.cfl === 290
-      || (t.frame?.decisions ?? []).some((d) => d.kind === 'level_request' && d.subjects.includes(TRN303) && d.status === 'executed'),
-    prepare: (t) => (t.rec(TRN303)?.cfl === 330 ? null : api('/api/command', { text: 'TRN303 C 330' })),
+    check: (x) => x.rec(TRN303)?.cfl === 290
+      || (x.frame?.decisions ?? []).some((d) => d.kind === 'level_request' && d.subjects.includes(TRN303) && d.status === 'executed'),
+    prepare: (x) => (x.rec(TRN303)?.cfl === 330 ? null : api('/api/command', { text: 'TRN303 C 330' })),
   },
   {
-    title: 'Time and score',
-    body: `<p>The score rewards safe, efficient work: <b>+2</b> per aircraft handled, <b>+10</b> per request granted,
-      <b>−2</b> per STCA, <b>−10</b> per ignored request and <b>−50</b> per loss of separation.</p>
-      <p>Live traffic always runs in real time. In <b>Replay</b> scenarios (recorded traffic) you can speed up to 16×.</p>`,
-    goal: 'Speed up the simulation to 2× or more.',
-    how: () => `<p>Use the <b>1× 2× 4× 8× 16×</b> buttons${compact() ? ' in the <b>⋯</b> panel' : ' next to pause'}.
-      <kbd>Space</kbd> pauses and resumes.</p>`,
+    id: 'score',
+    how: () => t('tut.score.how', { bar: compact() ? t('tut.where.inPanel') : t('tut.where.nextToPause') }),
     target: '#speed-seg',
-    check: (t) => (t.frame?.speed ?? 1) >= 2,
+    check: (x) => (x.frame?.speed ?? 1) >= 2,
   },
-  {
-    title: 'You are ready',
-    body: `<p>Well done: you have navigated the scope, issued headings, direct-tos and level changes,
-      resolved a conflict, used the decision assistant and answered a pilot request.</p>
-      <p>Next: pick a sector with live or replayed traffic and keep it safe. The tutorial is always available
-      from the account menu (<b>Tutorial</b>).</p>`,
-    info: true,
-    last: true,
-  },
+  { id: 'ready', info: true, last: true },
 ];
 
 export class Tutorial {
@@ -228,22 +155,22 @@ export class Tutorial {
       $('tut-offer').close();
       await this.ui.call('/api/tutorial/dismiss', {});
       this.refreshMe();
-      this.ui.toast('The tutorial stays available in the account menu.');
+      this.ui.toast(t('tut.dismissed'));
     };
-    const open = () => {
-      $('user-pop').classList.add('hidden');
-      if (this.active) { $('tutorial').classList.remove('min'); return; }
-      // unfinished: resume where they left off; completed or declined: start over
-      this.start(this.me?.tutorial_state == null ? this.me?.tutorial_step || 0 : 0);
-    };
-    $('menu-tutorial').onclick = open;
-    $('btn-tutorial').onclick = open;
+    $('menu-tutorial').onclick = () => this.openFromMenu();
+  }
+
+  /** Open the tutorial: unfinished resumes where it was left, completed or declined starts over. */
+  openFromMenu() {
+    $('user-pop').classList.add('hidden');
+    if (this.active) { $('tutorial').classList.remove('min'); return; }
+    this.start(this.me?.tutorial_state == null ? this.me?.tutorial_step || 0 : 0);
   }
 
   async refreshMe() {
     try { this.me = await api('/api/auth/me'); } catch { return; }
     $('tut-pill').classList.toggle('hidden', this.me.tutorial_state === 'completed');
-    $('btn-tutorial').classList.toggle('recommended', this.me.tutorial_state !== 'completed');
+    $('btn-training').classList.toggle('recommended', this.me.tutorial_state !== 'completed');
   }
 
   /** At sign-in: offer the tutorial until completed or declined for good. */
@@ -251,12 +178,13 @@ export class Tutorial {
     await this.refreshMe();
     if (!this.me || this.me.tutorial_state != null) return;
     const step = this.me.tutorial_step || 0;
-    $('tut-start').textContent = step > 0 ? `Resume at lesson ${step + 1}` : 'Start the tutorial';
+    $('tut-start').textContent = step > 0 ? t('tut.resumeAt', { n: step + 1 }) : t('tutOffer.start');
     $('tut-offer-resume').classList.toggle('hidden', step === 0);
     $('tut-offer').showModal();
   }
 
   async start(step = 0) {
+    if (this.app.coach?.exercise) await this.app.coach.leaveExercise(true);
     try {
       await api('/api/tutorial/start', {});
     } catch (e) {
@@ -268,7 +196,7 @@ export class Tutorial {
     this.done = new Set();
     this.state = {};
     document.body.classList.add('training');
-    this.ui.resetForContext('Training session started in your private copy of the Alps region.');
+    this.ui.resetForContext(t('tut.started'));
     this.app.select(null);
     this.feed.reconnect();
     this.app.flyTo(44.6, 6.6, 2400);
@@ -276,29 +204,31 @@ export class Tutorial {
     await this.go(Math.min(step, STEPS.length - 1), true);
   }
 
-  async leave(message) {
+  /** Back to live traffic. quiet: an exercise takes over the sandbox, so don't reconnect. */
+  async leave(message, quiet = false) {
     this.active = false;
     this.highlight(null);
     document.body.classList.remove('training');
     $('tutorial').classList.add('hidden');
     setContext(null);
+    this.refreshMe();
+    if (quiet) return;
     this.ui.resetForContext(message);
     this.app.select(null);
     this.feed.reconnect();
-    this.refreshMe();
   }
 
   async exit() {
     if (!this.active) return;
     await api('/api/tutorial/stop', {}).catch(() => {});
-    await this.leave('Back to live traffic. Resume the tutorial from the account menu.');
+    await this.leave(t('tut.backToLive'));
   }
 
   /** The sandbox vanished (idle timeout, or restarted in another tab). */
   sandboxGone() {
     if (!this.active) return;
-    this.ui.toast('Training session ended. Resume it from the account menu.', true);
-    this.leave('Training session ended.');
+    this.ui.toast(t('tut.endedToast'), true);
+    this.leave(t('tut.ended'));
   }
 
   async go(i, resumed = false) {
@@ -317,8 +247,8 @@ export class Tutorial {
     const s = STEPS[this.i];
     if (s.last) {
       try { await api('/api/tutorial/complete', {}); } catch (e) { this.ui.toast(e.message, true); return; }
-      await this.leave('Tutorial completed. Welcome aboard, controller!');
-      this.ui.toast('Tutorial completed');
+      await this.leave(t('tut.completedMsg'));
+      this.ui.toast(t('tut.completed'));
       return;
     }
     this.go(this.i + 1);
@@ -332,17 +262,17 @@ export class Tutorial {
 
   render() {
     const s = STEPS[this.i];
-    const html = (v) => (typeof v === 'function' ? v(this) : v ?? '');
-    $('tut-step').textContent = `Lesson ${this.i + 1} of ${STEPS.length}`;
-    $('tut-title').textContent = s.title;
-    $('tut-body').innerHTML = html(s.body);
+    const k = (part) => t(`tut.${s.id}.${part}`);
+    $('tut-step').textContent = t('tut.lessonOf', { n: this.i + 1, total: STEPS.length });
+    $('tut-title').textContent = k('title');
+    $('tut-body').innerHTML = k('body');
     $('tut-goal').classList.toggle('hidden', !!s.info);
-    $('tut-goal-text').textContent = s.goal ?? '';
-    $('tut-how').innerHTML = html(s.how);
+    $('tut-goal-text').textContent = s.info ? '' : k('goal');
+    $('tut-how').innerHTML = s.info ? '' : (s.how ? s.how(this) : k('how'));
     $('tut-back').disabled = this.i === 0;
     $('tut-skip').classList.toggle('hidden', !!s.info);
     $('tut-show').classList.toggle('hidden', !s.showMe);
-    $('tut-next').textContent = s.last ? 'Finish' : 'Next';
+    $('tut-next').textContent = t(s.last ? 'tut.finish' : 'tut.next');
     $('tut-bar').style.width = `${((this.i + 1) / STEPS.length) * 100}%`;
     this.update(true);
   }

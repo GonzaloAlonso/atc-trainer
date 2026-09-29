@@ -1,4 +1,6 @@
-// "tutorial" routes API calls and the live feed to the caller's private training sandbox.
+import { getLang } from './i18n.js';
+
+// "tutorial" / "exercise" route API calls and the live feed to the caller's private sandbox.
 let context = null;
 export function setContext(ctx) { context = ctx; }
 export function getContext() { return context; }
@@ -11,7 +13,8 @@ function toLogin(extra = '') {
 /** JSON API call. GET without a body; POST by default with a body; any method via `method`. */
 export async function api(path, body, method) {
   const m = method || (body === undefined ? 'GET' : 'POST');
-  const opts = { method: m, headers: {} };
+  // the server answers errors in the interface's language
+  const opts = { method: m, headers: { 'Accept-Language': getLang() } };
   if (context) opts.headers['X-ATC-Context'] = context;
   if (body !== undefined && m !== 'GET') {
     opts.headers['Content-Type'] = 'application/json';
@@ -20,10 +23,10 @@ export async function api(path, body, method) {
   const res = await fetch(path, opts);
   const data = await res.json().catch(() => ({}));
   if (res.status === 401) { toLogin(); throw new Error('Signed out'); }
-  if (res.status === 403 && data.detail === 'password change required') { location.href = '/login?change=1'; throw new Error(data.detail); }
+  if (res.status === 403 && data.code === 'password_change_required') { location.href = '/login?change=1'; throw new Error(data.detail); }
   if (!res.ok) {
     const d = data.detail;
-    throw new Error(typeof d === 'string' ? d : Array.isArray(d) ? d.map((x) => x.msg).join('; ') : `HTTP ${res.status}`);
+    throw new Error(typeof d === 'string' ? d : data.message || (Array.isArray(d) ? d.map((x) => x.msg).join('; ') : `HTTP ${res.status}`));
   }
   return data;
 }

@@ -30,6 +30,7 @@ from .geo import distance_nm, local_xy_nm
 
 PREDICT_S = 240.0
 PREDICT_DT = 10.0
+VERTICAL_OK_FT = 950.0   # levelling off approaches a level asymptotically: 999 ft is 1000 ft
 _ids = itertools.count(1)
 
 
@@ -53,12 +54,16 @@ def ac_state(ac):
     }
 
 
-def predict(engine, subjects, option_clearances, t):
+def predict(engine, subjects, option_clearances, t, tracks=False):
     """Fly subjects + neighbours forward with the option applied.
 
-    Returns dict(min_h_nm, min_v_ft, los, first_los_s, los_duration_s, conflicts_with):
+    Returns dict(min_h_nm, min_v_ft, los, first_los_s, los_duration_s, conflicts_with, cpa):
     min_h/min_v describe the tightest geometry among vertically-close pairs; los_duration_s is
     how long (within the horizon) any subject is below minima — 0 means the option is clean.
+    cpa is the closest horizontal approach of a subject to any aircraft within 3000 ft
+    ({"t", "a", "b", "h", "v"}), which is what the 3D what-if view marks. With tracks=True the
+    result also holds "tracks": {aircraft id: [[lat, lon, alt_ft], ...]} every PREDICT_DT from
+    now, and "cpa_at": the two positions at the closest approach.
     """
     subj_ids = {a.id for a in subjects}
     pool = {}
@@ -74,7 +79,9 @@ def predict(engine, subjects, option_clearances, t):
                 c.issue(Clearance(clr.kind, clr.value, clr.direction), t, engine.navdata, "predict")
             except ValueError:
                 pass
+    paths = {k: [[round(c.lat, 4), round(c.lon, 4), round(c.alt)]] for k, c in clones.items()} if tracks else None
     min_h, min_v, los_t, los_s = 1e9, 1e9, None, 0.0
+    cpa, cpa_at = None, None
     offenders = set()
     tt = t
     steps = int(PREDICT_S / PREDICT_DT)
@@ -82,6 +89,9 @@ def predict(engine, subjects, option_clearances, t):
         for c in clones.values():
             c.step(tt, PREDICT_DT)
         tt += PREDICT_DT
+        if paths is not None:
+            for key, c in clones.items():
+                paths[key].append([round(c.lat, 4), round(c.lon, 4), round(c.alt)])
         in_los = False
         for sid in subj_ids:
             a = clones[sid]
@@ -99,18 +109,29 @@ def predict(engine, subjects, option_clearances, t):
                     if los_t is None:
                         los_t = (k + 1) * PREDICT_DT
                 # track the tightest geometry among vertically-close pairs
-                if v < config.SEP_V_FT and h < min_h:
+                if v < VERTICAL_OK_FT and h < min_h:
                     min_h, min_v = h, v
+                if cpa is None or h < cpa["h"]:
+                    cpa = {"t": (k + 1) * PREDICT_DT, "a": sid, "b": oid, "h": round(h, 1), "v": round(v)}
+                    if tracks:
+                        cpa_at = [[round(a.lat, 4), round(a.lon, 4), round(a.alt)],
+                                  [round(b.lat, 4), round(b.lon, 4), round(b.alt)]]
         if in_los:
             los_s += PREDICT_DT
-    return {
+    out = {
         "min_h_nm": round(min_h, 1) if min_h < 1e8 else None,
         "min_v_ft": round(min_v) if min_v < 1e8 else None,
         "los": los_t is not None,
         "first_los_s": los_t,
         "los_duration_s": los_s,
         "conflicts_with": sorted(offenders),
+        "cpa": cpa,
     }
+    if tracks:
+        out["tracks"] = paths
+        out["cpa_at"] = cpa_at
+        out["step_s"] = PREDICT_DT
+    return out
 
 
 def _vertical_options(ac):
@@ -153,13 +174,16 @@ class DecisionPoint:
         self.key = None
         self.sector_ids = []       # sectors involved (set by the engine)
         self.holders = []          # holder keys responsible for this decision point
+        self.best = None           # reference answer (option id), see coach.explain
 
-    def questions(self):
+    def questions(self, reveal=None):
+        """reveal: None = every option; otherwise only the option ids in it (a trainee working
+        without the decision assistant sees the options a hint has revealed, nothing else)."""
         opt_view = [{
-            "id": o["id"], "label": o["label"],
+            "id": o["id"], "label": o["label"], "role": o.get("role"),
             "clearances": [{"aircraft": cs, **c.to_dict()} for cs, c in o["clearances_view"]],
-            "predicted": o["predicted"], "cost": o["cost"],
-        } for o in self.options]
+            "predicted": o["predicted"], "cost": o["cost"], "why": o.get("why"),
+        } for o in self.options if reveal is None or o["id"] in reveal]
         qs = [{"id": "action", "type": "choice", "prompt": self.prompt, "options": opt_view}]
         if self.kind == "conflict":
             qs.append({"id": "urgency", "type": "score",
@@ -169,30 +193,56 @@ class DecisionPoint:
                        "statement": "If no action is taken, separation will be lost."})
         return qs
 
-    def to_dict(self):
-        return {
+    def to_dict(self, reveal=None):
+        """reveal: see questions(). With options hidden the AI's best answer and suggestion are
+        hidden too, and "hidden_options" says how many there are."""
+        d = {
             "id": self.id, "kind": self.kind, "status": self.status,
             "created_t": self.created_t, "updated_t": self.updated_t,
             "subjects": self.subject_ids, "state": self.state,
             "sectors": self.sector_ids, "holders": self.holders,
-            "questions": self.questions(),
-            "suggestion": self.suggestion, "answer": self.answer, "answered_by": self.answered_by,
+            "questions": self.questions(reveal),
+            "best": self.best if reveal is None else None,
+            "suggestion": self.suggestion if reveal is None else None,
+            "answer": self.answer, "answered_by": self.answered_by,
         }
+        if reveal is not None:
+            d["hidden_options"] = len(self.options) - len(d["questions"][0]["options"])
+        return d
+
+
+def option_role(clearances):
+    """What kind of change an option makes: monitor | vertical | lateral | speed | route."""
+    kinds = {c.kind for _, c in clearances}
+    if not kinds:
+        return "monitor"
+    if kinds & {"CLIMB", "DESCEND", "LEVEL"}:
+        return "vertical"
+    if kinds & {"TURN", "HEADING"}:
+        return "lateral"
+    if kinds == {"SPEED"}:
+        return "speed"
+    return "route"
 
 
 def build_options(engine, dp, subjects, raw_options, t):
-    """raw_options: [(label, [(aircraft, Clearance)], cost)] -> evaluated option dicts."""
+    """raw_options: [(label, [(aircraft, Clearance)], cost[, role])] -> evaluated option dicts,
+    each explained (why it is or isn't the answer) by the coach."""
+    from .coach import explain              # late import: the coach package imports this module
     out = []
-    for i, (label, clrs, cost) in enumerate(raw_options):
+    for i, raw in enumerate(raw_options):
+        label, clrs, cost = raw[:3]
         pred = predict(engine, subjects, [(ac.id, c) for ac, c in clrs], t)
         out.append({
             "id": "o%d" % i, "label": label, "cost": cost,
+            "role": raw[3] if len(raw) > 3 else option_role(clrs),
             "clearances": [(ac.id, c) for ac, c in clrs],
             "clearances_view": [(ac.callsign, c) for ac, c in clrs],
             "predicted": pred,
         })
     dp.options = out
     dp.updated_t = t
+    explain.annotate(dp, engine)
 
 
 def conflict_decision(engine, a, b, conflict, t):
@@ -232,11 +282,13 @@ def level_request_decision(engine, ac, requested_fl, t):
     }
     prompt = "%s requests %s to FL%03d. Choose a response." % (ac.callsign, kind.lower(), requested_fl)
     dp = DecisionPoint("level_request", [ac], state, prompt, t)
-    raw = [("%s approve FL%03d" % (ac.callsign, requested_fl), [(ac, Clearance(kind, requested_fl))], 0.0)]
+    raw = [("%s approve FL%03d" % (ac.callsign, requested_fl), [(ac, Clearance(kind, requested_fl))], 0.0,
+            "approve")]
     mid = (_level(ac.alt) + requested_fl) // 20 * 10
     if mid not in (_level(ac.alt), requested_fl) and abs(mid - _level(ac.alt)) >= 10:
-        raw.append(("%s intermediate FL%03d" % (ac.callsign, mid), [(ac, Clearance(kind, mid))], 0.5))
-    raw.append(("deny (maintain level)", [], 1.0))
+        raw.append(("%s intermediate FL%03d" % (ac.callsign, mid), [(ac, Clearance(kind, mid))], 0.5,
+                    "intermediate"))
+    raw.append(("deny (maintain level)", [], 1.0, "deny"))
     build_options(engine, dp, [ac], raw, t)
     dp.requested_fl = requested_fl
     return dp
@@ -251,7 +303,7 @@ def route_request_decision(engine, ac, t):
     }
     prompt = "%s requests to resume own navigation. Choose a response." % ac.callsign
     dp = DecisionPoint("route_request", [ac], state, prompt, t)
-    raw = [("%s resume own navigation" % ac.callsign, [(ac, Clearance("RESUME"))], 0.0),
-           ("deny (continue present heading)", [], 1.0)]
+    raw = [("%s resume own navigation" % ac.callsign, [(ac, Clearance("RESUME"))], 0.0, "approve"),
+           ("deny (continue present heading)", [], 1.0, "deny")]
     build_options(engine, dp, [ac], raw, t)
     return dp

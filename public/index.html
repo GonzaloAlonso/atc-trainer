@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="i18n-pending">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -11,6 +11,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="css/style.css" />
   <link rel="stylesheet" href="css/pages.css" />
+  <link rel="stylesheet" href="css/coach.css" />
   <script type="importmap">
     {
       "imports": {
@@ -31,60 +32,71 @@
       <div id="date">UTC</div>
     </div>
     <span id="mode-badge" class="badge">LIVE</span>
-    <button id="btn-pause" class="icon" title="Pause / resume (Space)">❚❚</button>
+    <button id="btn-pause" class="icon" data-i18n-title="top.pauseTip" title="Pause / resume (Space)">❚❚</button>
     <!-- Desktop: these are ordinary top-bar items (display: contents).
          Small screens: they move into a panel opened with the ⋯ button. -->
     <div id="top-extra" class="top-extra">
       <div class="seg" id="speed-seg">
         <button data-speed="1">1×</button><button data-speed="2">2×</button><button data-speed="4">4×</button><button data-speed="8">8×</button><button data-speed="16">16×</button>
       </div>
-      <label class="field">Scenario <select id="scenario"></select></label>
-      <button id="my-sectors" class="my-sectors" title="The sectors you control: open the Sectors list">
+      <label class="field"><span data-i18n="top.scenario">Scenario</span> <select id="scenario"></select></label>
+      <button id="my-sectors" class="my-sectors" data-i18n-title="top.mySectorsTip" title="The sectors you control: open the Sectors list">
         <span class="chip" aria-hidden="true"></span><span id="my-sectors-text">No sector</span>
       </button>
-      <label class="field">AI
-        <select id="ai-mode"><option value="off">Off</option><option value="advisory">Advisory</option><option value="autonomous">Autonomous</option></select>
-        <select id="ai-agent"></select>
+      <label class="field coach-field" data-i18n-title="top.coachTip" title="How much the AI coach helps you">
+        <span data-i18n="top.coach">Coach</span>
+        <select id="coach-level">
+          <option value="off" data-i18n="levels.off">Off</option>
+          <option value="evaluate" data-i18n="levels.evaluate">Evaluate</option>
+          <option value="hints" data-i18n="levels.hints">Hints</option>
+          <option value="advise" data-i18n="levels.advise">Advise</option>
+          <option value="demonstrate" data-i18n="levels.demonstrate">Demonstrate</option>
+        </select>
+      </label>
+      <label class="field" data-i18n-title="top.aiTip" title="The AI that advises and demonstrates, and controls sectors handed to it">
+        <span data-i18n="top.ai">AI</span> <select id="ai-agent"></select>
       </label>
       <div class="spacer"></div>
       <div id="score" class="score"></div>
-      <div class="seg" id="style-seg"><button data-style="radar">Radar</button><button data-style="satellite">Satellite</button></div>
-      <button id="btn-settings" class="icon" title="Display settings">⚙</button>
+      <div class="seg" id="style-seg"><button data-style="radar" data-i18n="top.radar">Radar</button><button data-style="satellite" data-i18n="top.satellite">Satellite</button></div>
+      <button id="btn-settings" class="icon" data-i18n-title="top.settingsTip" title="Display settings">⚙</button>
     </div>
     <div class="spacer compact-only"></div>
-    <button id="btn-lists" class="icon lists-btn lists-only" title="Alerts, decisions &amp; traffic" aria-expanded="false">☰<b id="lists-count"></b></button>
-    <button id="btn-more" class="icon compact-only" title="Controls" aria-expanded="false" aria-controls="top-extra"><svg width="16" height="4" viewBox="0 0 16 4" aria-hidden="true"><circle cx="2" cy="2" r="1.6"/><circle cx="8" cy="2" r="1.6"/><circle cx="14" cy="2" r="1.6"/></svg></button>
-    <button id="btn-tutorial" class="tutorial-btn" title="Guided tutorial: learn or refresh the basics"><span class="cap" aria-hidden="true">🎓</span><span class="label">Tutorial</span></button>
+    <button id="btn-lists" class="icon lists-btn lists-only" data-i18n-title="top.listsTip" title="Alerts, decisions &amp; traffic" aria-expanded="false">☰<b id="lists-count"></b></button>
+    <button id="btn-more" class="icon compact-only" data-i18n-title="top.moreTip" title="Controls" aria-expanded="false" aria-controls="top-extra"><svg width="16" height="4" viewBox="0 0 16 4" aria-hidden="true"><circle cx="2" cy="2" r="1.6"/><circle cx="8" cy="2" r="1.6"/><circle cx="14" cy="2" r="1.6"/></svg></button>
+    <button id="btn-training" class="tutorial-btn" data-i18n-title="top.trainingTip" title="Training: tutorial, exercises and your debriefs"><span class="cap" aria-hidden="true">🎓</span><span class="label" data-i18n="top.training">Training</span></button>
     <div class="user-menu">
-      <button id="user-btn" class="user-btn" title="Account"><span class="dot"></span><span id="user-name">…</span> ▾</button>
+      <button id="user-btn" class="user-btn" data-i18n-title="menu.account" title="Account"><span class="dot"></span><span id="user-name">…</span> ▾</button>
       <div id="user-pop" class="menu hidden">
         <div id="user-role" class="menu-head"></div>
-        <button id="menu-tutorial">Tutorial <span id="tut-pill" class="pill warn hidden">recommended</span></button>
-        <button id="menu-password">Change password</button>
-        <a id="menu-admin" href="/admin" class="hidden">Manage users</a>
-        <button id="menu-about">About ATC Trainer</button>
-        <button id="menu-logout">Sign out</button>
+        <button id="menu-training" data-i18n="menu.training">Training center</button>
+        <button id="menu-tutorial"><span data-i18n="menu.tutorial">Tutorial</span> <span id="tut-pill" class="pill warn hidden" data-i18n="menu.recommended">recommended</span></button>
+        <label class="menu-lang"><span data-i18n="menu.language">Language</span> <select id="menu-lang"></select></label>
+        <button id="menu-password" data-i18n="menu.password">Change password</button>
+        <a id="menu-admin" href="/admin" class="hidden" data-i18n="menu.admin">Manage users</a>
+        <button id="menu-about" data-i18n="menu.about">About ATC Trainer</button>
+        <button id="menu-logout" data-i18n="menu.logout">Sign out</button>
       </div>
     </div>
   </header>
 
   <div id="settings" class="pop hidden">
-    <label>Vertical exaggeration <input id="vexag" type="range" min="1" max="12" step="1" value="3" /><output id="vexag-out">3×</output></label>
-    <label>Speed vectors
-      <select id="vec-min"><option value="0">off</option><option value="1">1 min</option><option value="2" selected>2 min</option><option value="5">5 min</option></select>
+    <label><span data-i18n="settings.vexag">Vertical exaggeration</span> <input id="vexag" type="range" min="1" max="12" step="1" value="3" /><output id="vexag-out">3×</output></label>
+    <label><span data-i18n="settings.vectors">Speed vectors</span>
+      <select id="vec-min"><option value="0" data-i18n="settings.off">off</option><option value="1">1 min</option><option value="2" selected>2 min</option><option value="5">5 min</option></select>
     </label>
-    <label><input id="opt-trails" type="checkbox" checked /> History trails</label>
-    <label><input id="opt-drops" type="checkbox" checked /> Altitude drop lines</label>
-    <label><input id="opt-labels" type="checkbox" /> Label all traffic</label>
-    <p class="hint">Left-drag pan · right-drag rotate/tilt · wheel zoom · click aircraft to select · <kbd>/</kbd> command line · <kbd>Space</kbd> pause · <kbd>Esc</kbd> deselect</p>
+    <label><input id="opt-trails" type="checkbox" checked /> <span data-i18n="settings.trails">History trails</span></label>
+    <label><input id="opt-drops" type="checkbox" checked /> <span data-i18n="settings.drops">Altitude drop lines</span></label>
+    <label><input id="opt-labels" type="checkbox" /> <span data-i18n="settings.labels">Label all traffic</span></label>
+    <p class="hint" data-i18n-html="settings.help">Left-drag pan · right-drag rotate/tilt · wheel zoom · click aircraft to select · <kbd>/</kbd> command line · <kbd>Space</kbd> pause · <kbd>Esc</kbd> deselect</p>
   </div>
 
   <aside id="left" class="panel">
     <nav class="tabs">
-      <button data-tab="alerts" class="on">Alerts <b id="n-alerts">0</b></button>
-      <button data-tab="decisions">Decisions <b id="n-dec">0</b></button>
-      <button data-tab="traffic">Traffic <b id="n-traffic">0</b></button>
-      <button data-tab="sectors">Sectors <b id="n-sectors">0</b></button>
+      <button data-tab="alerts" class="on"><span data-i18n="tabs.alerts">Alerts</span> <b id="n-alerts">0</b></button>
+      <button data-tab="decisions"><span data-i18n="tabs.decisions">Decisions</span> <b id="n-dec">0</b></button>
+      <button data-tab="traffic"><span data-i18n="tabs.traffic">Traffic</span> <b id="n-traffic">0</b></button>
+      <button data-tab="sectors"><span data-i18n="tabs.sectors">Sectors</span> <b id="n-sectors">0</b></button>
     </nav>
     <div class="tab-body">
       <div id="tab-alerts" class="tab on"></div>
@@ -101,7 +113,10 @@
           <div id="s-callsign" class="callsign">—</div>
           <div id="s-sub" class="dim"></div>
         </div>
-        <button id="s-close" class="icon" title="Deselect (Esc)">×</button>
+        <div class="strip-tools">
+          <button id="s-whatif" class="icon whatif-btn" aria-pressed="false" data-i18n-title="strip.whatifTip" title="What-if: show the prediction instead of sending the clearance">?</button>
+          <button id="s-close" class="icon" data-i18n-title="strip.closeTip" title="Deselect (Esc)">×</button>
+        </div>
       </div>
       <div class="strip-grid">
         <div><span>FL</span><b id="s-fl">—</b></div>
@@ -117,128 +132,205 @@
     </div>
 
     <div class="ctl">
+      <p id="whatif-note" class="whatif-note hidden" data-i18n="strip.whatifOn">What-if mode: the buttons show the prediction; nothing is sent.</p>
       <div class="ctl-row">
-        <label>Level</label>
+        <label data-i18n="strip.level">Level</label>
         <button class="step" data-fl="-10">−</button>
         <input id="c-fl" type="number" min="0" max="600" step="10" />
         <button class="step" data-fl="10">+</button>
         <button id="c-fl-go" class="go">Climb</button>
       </div>
       <div class="ctl-row">
-        <label>Heading</label>
+        <label data-i18n="strip.heading">Heading</label>
         <button id="c-hdg-l" class="go ghost">◀ L</button>
         <input id="c-hdg" type="number" min="1" max="360" step="5" />
         <button id="c-hdg-r" class="go ghost">R ▶</button>
-        <button id="c-hdg-go" class="go">Fly</button>
+        <button id="c-hdg-go" class="go" data-i18n="strip.fly">Fly</button>
       </div>
       <div class="ctl-row quick">
         <label></label>
         <button data-turn="L30">L30</button><button data-turn="L10">L10</button><button data-turn="R10">R10</button><button data-turn="R30">R30</button>
       </div>
       <div class="ctl-row">
-        <label>Direct</label>
-        <input id="c-dct" list="c-dct-list" placeholder="fix / airport" class="wide" />
+        <label data-i18n="strip.direct">Direct</label>
+        <input id="c-dct" list="c-dct-list" data-i18n-placeholder="strip.fixPlaceholder" placeholder="fix / airport" class="wide" />
         <datalist id="c-dct-list"></datalist>
         <button id="c-dct-go" class="go">DCT</button>
       </div>
       <div class="ctl-row">
-        <label>Speed</label>
+        <label data-i18n="strip.speed">Speed</label>
         <input id="c-spd" type="number" min="100" max="450" step="10" placeholder="IAS" />
-        <button id="c-spd-go" class="go">Set</button>
-        <button id="c-ron" class="go ghost wide">Resume own nav</button>
+        <button id="c-spd-go" class="go" data-i18n="strip.set">Set</button>
+        <button id="c-ron" class="go ghost wide" data-i18n="strip.ron">Resume own nav</button>
       </div>
     </div>
   </aside>
+
+  <!-- coach: grades after each decision, hints -->
+  <div id="coach-cards" aria-live="polite"></div>
 
   <footer id="bottom" class="panel">
     <div id="radio"></div>
     <form id="cmd-form" autocomplete="off">
       <span class="prompt">ATC&gt;</span>
-      <input id="cmd" placeholder="DLH4AB C 370 · TL 270 · TR 20D · DCT KPT · S 280 · RON   (press / to focus)" spellcheck="false" />
+      <input id="cmd" data-i18n-placeholder="cmd.placeholder" placeholder="DLH4AB C 370 · TL 270 · TR 20D · DCT KPT · S 280 · RON   (press / to focus; end with ? to predict)" spellcheck="false" />
     </form>
   </footer>
 
-  <div id="statusbar"><span><button id="version-link" class="linkish" title="About ATC Trainer"></button> <span id="rec-status"></span></span><span id="attribution"><span class="attr-long"></span><span class="attr-short"></span></span></div>
+  <div id="statusbar"><span><button id="version-link" class="linkish" data-i18n-title="menu.about" title="About ATC Trainer"></button> <span id="rec-status"></span></span><span id="attribution"><span class="attr-long"></span><span class="attr-short"></span></span></div>
   <div id="toast" class="hidden"></div>
+  <div id="whatif-label" class="whatif-label hidden"></div>
   <div id="upgrade" class="upgrade hidden" role="alert">
     <span id="upgrade-text">A new version is available.</span>
-    <button class="primary" onclick="location.reload()">Reload</button>
+    <button class="primary" onclick="location.reload()" data-i18n="upgrade.reload">Reload</button>
   </div>
+
+  <!-- 3D replay of a recorded session -->
+  <div id="replay-bar" class="replay-bar hidden">
+    <span class="replay-tag" data-i18n="replay.tag">REPLAY</span>
+    <button id="replay-play" class="icon" data-i18n-title="replay.playTip" title="Play / pause">❚❚</button>
+    <div class="seg" id="replay-speed"><button data-rs="1">1×</button><button data-rs="4" class="on">4×</button><button data-rs="16">16×</button></div>
+    <input id="replay-pos" type="range" min="0" max="1000" value="0" />
+    <span id="replay-time" class="replay-time">--:--:--</span>
+    <button id="replay-close" class="ghost-btn small" data-i18n="replay.close">Back to the debrief</button>
+  </div>
+
+  <!-- Exercise in progress -->
+  <section id="ex-hud" class="tut ex-hud hidden" aria-live="polite">
+    <div class="tut-head">
+      <span id="ex-step" class="tut-step"></span>
+      <span class="tut-tag" data-i18n="ex.tag">EXERCISE</span>
+      <button id="ex-min" class="icon" data-i18n-title="tut.minTip" title="Minimise / expand">▁</button>
+      <button id="ex-exit" class="icon" data-i18n-title="ex.exitTip" title="Leave the exercise">×</button>
+    </div>
+    <div class="tut-scroll">
+      <h2 id="ex-title"></h2>
+      <div id="ex-brief" class="tut-body"></div>
+      <div class="tut-goal"><span class="tut-check" aria-hidden="true"></span><div><b data-i18n="tut.goal">Goal</b><p id="ex-goal"></p></div></div>
+      <div id="ex-result" class="ex-result hidden"></div>
+    </div>
+    <div class="tut-actions">
+      <button id="ex-restart" class="ghost-btn" data-i18n="ex.restart">Restart</button>
+      <span class="spacer"></span>
+      <button id="ex-debrief" class="primary" data-i18n="ex.debrief">Debrief</button>
+    </div>
+    <div class="tut-progress"><div id="ex-bar"></div></div>
+  </section>
 
   <!-- Guided tutorial -->
   <section id="tutorial" class="tut hidden" aria-live="polite" aria-labelledby="tut-title">
     <div class="tut-head">
       <span id="tut-step" class="tut-step"></span>
-      <span class="tut-tag">TRAINING</span>
-      <button id="tut-min" class="icon" title="Minimise / expand">▁</button>
-      <button id="tut-exit" class="icon" title="Leave the tutorial (progress is saved)">×</button>
+      <span class="tut-tag" data-i18n="tut.tag">TRAINING</span>
+      <button id="tut-min" class="icon" data-i18n-title="tut.minTip" title="Minimise / expand">▁</button>
+      <button id="tut-exit" class="icon" data-i18n-title="tut.exitTip" title="Leave the tutorial (progress is saved)">×</button>
     </div>
     <div class="tut-scroll">
       <h2 id="tut-title"></h2>
       <div id="tut-body" class="tut-body"></div>
       <div id="tut-goal" class="tut-goal">
         <span class="tut-check" aria-hidden="true"></span>
-        <div><b>Goal</b><p id="tut-goal-text"></p></div>
+        <div><b data-i18n="tut.goal">Goal</b><p id="tut-goal-text"></p></div>
       </div>
       <div id="tut-how" class="tut-how"></div>
       <p id="tut-fail" class="tut-fail hidden"></p>
     </div>
     <div class="tut-actions">
-      <button id="tut-back" class="ghost-btn">Back</button>
-      <button id="tut-show" class="ghost-btn hidden">Show me</button>
-      <button id="tut-retry" class="ghost-btn hidden">Replay situation</button>
+      <button id="tut-back" class="ghost-btn" data-i18n="tut.back">Back</button>
+      <button id="tut-show" class="ghost-btn hidden" data-i18n="tut.showMe">Show me</button>
+      <button id="tut-retry" class="ghost-btn hidden" data-i18n="tut.retry">Replay situation</button>
       <span class="spacer"></span>
-      <button id="tut-skip" class="ghost-btn">Skip</button>
-      <button id="tut-next" class="primary">Next</button>
+      <button id="tut-skip" class="ghost-btn" data-i18n="tut.skip">Skip</button>
+      <button id="tut-next" class="primary" data-i18n="tut.next">Next</button>
     </div>
     <div class="tut-progress"><div id="tut-bar"></div></div>
   </section>
 
   <dialog id="tut-offer" class="dialog tut-offer">
     <div class="brand big"><span class="logo"></span>ATC<span class="sub">TRAINER</span></div>
-    <h2>New here? Take the guided tutorial</h2>
-    <p>In about 10–15 minutes you will learn to read the scope, give clearances, resolve a conflict and answer
-      pilot requests, step by step in a <b>private practice sector</b>. Nothing you do there affects other controllers.</p>
-    <p class="dim"><b>Strongly recommended</b> before working live traffic. It is optional and always available from the account menu.</p>
-    <p id="tut-offer-resume" class="hint hidden">You started it earlier: pick up where you left off.</p>
+    <h2 data-i18n="tutOffer.title">New here? Take the guided tutorial</h2>
+    <p data-i18n-html="tutOffer.p1"></p>
+    <p class="dim" data-i18n-html="tutOffer.p2"></p>
+    <p id="tut-offer-resume" class="hint hidden" data-i18n="tutOffer.resume">You started it earlier: pick up where you left off.</p>
     <div class="dialog-actions">
-      <button type="button" id="tut-dismiss" class="ghost-btn">Don't remind me</button>
-      <button type="button" id="tut-later" class="ghost-btn">Maybe later</button>
-      <button type="button" id="tut-start" class="primary">Start the tutorial</button>
+      <button type="button" id="tut-dismiss" class="ghost-btn" data-i18n="tutOffer.dismiss">Don't remind me</button>
+      <button type="button" id="tut-later" class="ghost-btn" data-i18n="tutOffer.later">Maybe later</button>
+      <button type="button" id="tut-start" class="primary" data-i18n="tutOffer.start">Start the tutorial</button>
+    </div>
+  </dialog>
+
+  <!-- Training center: tutorial, exercises, history -->
+  <dialog id="hub-dialog" class="dialog hub">
+    <div class="about-head">
+      <h2 data-i18n="hub.title">Training center</h2>
+      <button type="button" class="icon" id="hub-close" data-i18n-aria-label="common.close" aria-label="Close">×</button>
+    </div>
+    <p class="dim hub-intro" data-i18n="hub.intro">Practise in a private sector, with the AI coach watching every decision.</p>
+    <nav class="tabs hub-tabs">
+      <button data-hub="exercises" class="on" data-i18n="hub.exercises">Exercises</button>
+      <button data-hub="history" data-i18n="hub.history">My sessions</button>
+    </nav>
+    <div id="hub-exercises" class="hub-pane"></div>
+    <div id="hub-history" class="hub-pane hidden"></div>
+  </dialog>
+
+  <!-- Debrief of a session -->
+  <dialog id="debrief" class="dialog debrief">
+    <div class="about-head">
+      <div>
+        <div id="db-kicker" class="db-kicker"></div>
+        <h2 id="db-title"></h2>
+      </div>
+      <button type="button" class="icon" id="db-close" data-i18n-aria-label="common.close" aria-label="Close">×</button>
+    </div>
+    <div id="db-summary" class="db-summary"></div>
+    <div id="db-timeline" class="db-timeline"></div>
+    <div class="db-cols">
+      <div id="db-entries" class="db-entries"></div>
+      <div class="db-coach">
+        <h3 data-i18n="debrief.coach">Coach</h3>
+        <div id="db-narrative" class="db-narrative"></div>
+        <div id="db-chat" class="db-chat"></div>
+        <form id="db-ask" class="db-ask">
+          <input id="db-question" maxlength="1000" data-i18n-placeholder="debrief.askPlaceholder" placeholder="Ask the coach about this session…" />
+          <button class="primary small" data-i18n="debrief.ask">Ask</button>
+        </form>
+        <p id="db-ask-note" class="hint"></p>
+      </div>
     </div>
   </dialog>
 
   <dialog id="about-dialog" class="dialog about">
     <div class="about-head">
       <div class="brand big"><span class="logo"></span>ATC<span class="sub">TRAINER</span></div>
-      <button type="button" class="icon" id="about-close" aria-label="Close">×</button>
+      <button type="button" class="icon" id="about-close" data-i18n-aria-label="common.close" aria-label="Close">×</button>
     </div>
     <p id="about-desc" class="dim"></p>
-    <h3>Build</h3>
+    <h3 data-i18n="about.build">Build</h3>
     <dl id="about-build" class="kv"></dl>
-    <h3>Runtime</h3>
+    <h3 data-i18n="about.runtime">Runtime</h3>
     <dl id="about-runtime" class="kv"></dl>
     <div class="about-copy">
       <div id="about-copyright"></div>
       <div id="about-credits"></div>
     </div>
     <details>
-      <summary>Data &amp; third-party software</summary>
+      <summary data-i18n="about.third">Data &amp; third-party software</summary>
       <ul id="about-third"></ul>
     </details>
   </dialog>
 
   <dialog id="pw-dialog" class="dialog">
     <form id="pw-form" class="stack" autocomplete="off">
-      <h2>Change password</h2>
-      <label>Current password <input id="pw-current" type="password" required autocomplete="current-password" /></label>
-      <label>New password <input id="pw-new" type="password" minlength="10" required autocomplete="new-password" /></label>
-      <label>Repeat new password <input id="pw-new2" type="password" minlength="10" required autocomplete="new-password" /></label>
-      <p class="hint">At least 10 characters. Your other sessions will be signed out.</p>
+      <h2 data-i18n="pw.title">Change password</h2>
+      <label><span data-i18n="pw.current">Current password</span> <input id="pw-current" type="password" required autocomplete="current-password" /></label>
+      <label><span data-i18n="pw.new">New password</span> <input id="pw-new" type="password" minlength="10" required autocomplete="new-password" /></label>
+      <label><span data-i18n="pw.repeat">Repeat new password</span> <input id="pw-new2" type="password" minlength="10" required autocomplete="new-password" /></label>
+      <p class="hint" data-i18n="pw.hint">At least 10 characters. Your other sessions will be signed out.</p>
       <p id="pw-error" class="form-error"></p>
       <div class="dialog-actions">
-        <button type="button" id="pw-cancel" class="ghost-btn">Cancel</button>
-        <button type="submit" class="primary">Change password</button>
+        <button type="button" id="pw-cancel" class="ghost-btn" data-i18n="common.cancel">Cancel</button>
+        <button type="submit" class="primary" data-i18n="pw.title">Change password</button>
       </div>
     </form>
   </dialog>
