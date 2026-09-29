@@ -34,20 +34,9 @@ label.check { display: flex !important; align-items: center; gap: 8px; }
 
 /* ------------------------------------------------------------ login */
 .auth-page { display: grid; place-items: center; min-height: 100vh; padding: 16px; }
-.radar-bg { position: fixed; inset: 0; overflow: hidden; z-index: 0;
-  background:
-    radial-gradient(circle at 50% 50%, rgba(92,200,255,0.08) 0 1px, transparent 1px) 0 0 / 28px 28px,
-    repeating-radial-gradient(circle at 50% 50%, transparent 0 119px, rgba(92,200,255,0.10) 119px 120px),
-    radial-gradient(ellipse at 50% 40%, #0b1a2c, var(--bg) 70%);
-}
-.sweep {
-  position: absolute; left: 50%; top: 50%; width: 160vmax; height: 160vmax;
-  transform: translate(-50%, -50%);
-  background: conic-gradient(from 0deg, rgba(92,200,255,0.16), transparent 12%);
-  animation: sweep 6s linear infinite;
-}
-@keyframes sweep { to { transform: translate(-50%, -50%) rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .sweep, .logo { animation: none; } }
+/* animated radar scope drawn by js/radar-scope.js */
+.radar-bg { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; z-index: 0; background: var(--bg); }
+@media (prefers-reduced-motion: reduce) { .logo::before { animation: none; } }
 .auth-card {
   position: relative; z-index: 1; width: min(380px, 100%);
   background: var(--panel); border: 1px solid var(--border); border-radius: 14px;

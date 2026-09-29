@@ -41,6 +41,7 @@ docker compose logs -f
 
 - The image contains the app and the airport and navaid data, which is downloaded at build time.
 - Recordings **and user accounts** live in the `visor-data` volume (`/data`), so they survive rebuilds and upgrades. Keep the container running to build the 24 h history.
+- **Idle sleep:** when nobody is online (no signed-in requests and no open scope) for `VISOR_IDLE_SLEEP_MIN` minutes (default 5, `0` = never), the simulation and tutorial sandboxes stop and free their memory. The OpenSky recorder keeps running, so the 24 h history stays complete. The next sign-in wakes the simulation with a fresh live scenario; the health probe does not wake it. `GET /api/status` reports it under `power`.
 - Run **one** container. The simulation state is held in memory, so do not scale the service.
 - The container listens on `127.0.0.1:8000` of the host. Publish it through a reverse proxy with TLS on its own (sub)domain; the UI uses absolute `/api` and `/ws` paths, so a sub-path such as `/visor/` won't work.
 

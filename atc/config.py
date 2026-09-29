@@ -58,3 +58,6 @@ LOS_V_FT = 900.0             # vertical loss threshold (tolerates altimetry nois
 PILOT_DELAY_S = (3.0, 8.0)   # pilot reaction time range
 # Human-held sectors are released after this long without the controller being online.
 SECTOR_IDLE_S = float(os.environ.get("VISOR_SECTOR_IDLE_MIN") or 10) * 60
+# With nobody online (no requests, no open scope) for this long, the simulation and tutorial
+# sandboxes go to sleep to save CPU and memory; the recorder keeps running. 0 = never sleep.
+IDLE_SLEEP_S = float(os.environ.get("VISOR_IDLE_SLEEP_MIN") or 5) * 60

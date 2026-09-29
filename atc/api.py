@@ -23,6 +23,7 @@ from .clearances import KINDS, Clearance
 from .control import ControlError, display, human
 from .engine import Engine
 from .navdata import NavData
+from .power import PowerManager
 from .recorder import Recorder
 from .store import Store
 from .training import TutorialManager
@@ -112,7 +113,8 @@ class TutorialScenario(BaseModel):
 
 COOKIE = "visor_session"
 # Reachable without a session: the login page and what it needs, plus the health probe.
-PUBLIC_EXACT = {"/login", "/login.html", "/api/health", "/api/auth/login", "/favicon.ico", "/js/login.js"}
+PUBLIC_EXACT = {"/login", "/login.html", "/api/health", "/api/auth/login", "/favicon.ico", "/js/login.js",
+                "/js/radar-scope.js"}
 PUBLIC_PREFIX = ("/css/",)
 ADMIN_PATHS = {"/admin", "/admin.html"}
 # Allowed while a password change is pending
@@ -146,6 +148,7 @@ def create_app():
     throttle = LoginThrottle()
     tutorials = TutorialManager(navdata)
     sockets = {}            # WebSocket -> (sandbox user id or None for live, viewer holder key)
+    power = PowerManager(engine, tutorials, config.IDLE_SLEEP_S)
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -163,6 +166,7 @@ def create_app():
                   description="Air traffic control simulator on recorded OpenSky data.\n\n"
                               + copyright_line() + " Owner, creator and developer: Gonzalo Alonso.")
     app.state.engine = engine
+    app.state.power = power
 
     async def _broadcast():
         last = {}               # ws -> last frame sent
@@ -172,6 +176,8 @@ def create_app():
             ticks += 1
             if ticks % 120 == 0:
                 tutorials.reap()
+            if ticks % 20 == 0:
+                power.check(connected=len(sockets))
             if not sockets:
                 continue
             sandboxes = tutorials.engines()
@@ -231,6 +237,10 @@ def create_app():
             if _is_api(path):
                 return JSONResponse({"detail": "password change required"}, status_code=403)
             return RedirectResponse("/login?change=1", status_code=302)
+        if power.asleep:
+            await asyncio.to_thread(power.activity)     # loading a scenario takes a moment
+        else:
+            power.activity()
         engine.control.seen(user["username"])
         if (path in ADMIN_PATHS or path.startswith("/api/admin/")) and user["role"] != "admin":
             if _is_api(path):
@@ -285,6 +295,7 @@ def create_app():
         throttle.succeeded(req.username)
         auth.purge_expired()
         token = auth.create_session(user["id"])
+        power.activity()
         response.set_cookie(COOKIE, token, max_age=int(config.SESSION_HOURS * 3600), httponly=True,
                             samesite="lax", secure=_cookie_secure(request), path="/")
         return {"user": _public_user(user), "token": token}
@@ -413,6 +424,8 @@ def create_app():
                 return
             uid, src = user["id"], box.engine
         viewer = human(user["username"])
+        if uid is None:
+            await asyncio.to_thread(power.activity)
         sockets[ws] = (uid, viewer)
         try:
             await ws.send_text(src.frame_for(viewer))
@@ -432,6 +445,7 @@ def create_app():
                 "sim": {"t": eng.t, "mode": eng.mode, "speed": eng.speed,
                         "paused": eng.paused, "lockstep": eng.lockstep,
                         "aircraft": len(eng.aircraft)},
+                "power": power.status(),
                 "area": config.EUROPE, "now": time.time()}
 
     @app.get("/api/navdata", tags=["info"])

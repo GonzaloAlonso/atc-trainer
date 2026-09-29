@@ -63,6 +63,8 @@ class Engine:
         self.frame_seq = 0
         self._shared = "{}"
         self._running = False
+        self._generation = 0           # bumps on every start/stop so a stale loop thread exits
+        self.hibernating = False
         self._last_reap = 0.0
         self.reset("live")
 
@@ -209,14 +211,48 @@ class Engine:
 
     # ------------------------------------------------------------------ run loop
     def start(self):
-        self._running = True
-        threading.Thread(target=self._loop, name="sim", daemon=True).start()
+        with self.lock:
+            self._generation += 1
+            self._running = True
+            threading.Thread(target=self._loop, args=(self._generation,), name="sim", daemon=True).start()
 
     def stop(self):
-        self._running = False
+        with self.lock:
+            self._generation += 1
+            self._running = False
 
-    def _loop(self):
-        while self._running:
+    def hibernate(self):
+        """Stop the loop and drop the scenario (aircraft, plans, alerts) to free CPU and memory.
+        Sector assignments and AI preferences are kept; wake() starts a fresh live scenario."""
+        with self.lock:
+            if self.hibernating:
+                return False
+            self.stop()
+            self.hibernating = True
+            self.aircraft = {}
+            self.loader.plans.clear()
+            self.conflicts = []
+            self._conflict_keys = {}
+            self._conflict_seen = {}
+            self.decisions = {}
+            self._decision_by_key = {}
+            self._cooldown = {}
+            self._los_ids = set()
+            self._event("system", "Nobody online: simulation asleep to save resources")
+            self._build_frame()
+            return True
+
+    def wake(self):
+        with self.lock:
+            if not self.hibernating:
+                return False
+            self.hibernating = False
+            self.reset("live")
+            self.start()
+            return True
+
+    def _loop(self, generation):
+        while self._running and generation == self._generation:
             t0 = time.monotonic()
             try:
                 with self.lock:
@@ -710,6 +746,7 @@ class Engine:
         shared = {
             "type": "frame", "seq": self.frame_seq + 1, "t": self.t, "mode": self.mode,
             "speed": self.speed, "paused": self.paused, "lockstep": self.lockstep,
+            "asleep": self.hibernating,
             "coverage": {"first": first, "last": last, "snapshots": nsnap},
             "ac": ac_rows,
             "sectorization": [[sid, holders.get(sid), counts.get(sid, 0)] for sid in sectors.BY_ID],

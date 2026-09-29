@@ -15,6 +15,7 @@ services:
       VISOR_ADMIN_PASSWORD: ${VISOR_ADMIN_PASSWORD:-}
       VISOR_COOKIE_SECURE: "true"      # always served over HTTPS by Caddy
       VISOR_TRUST_PROXY: "1"           # real client IP from Caddy's X-Forwarded-For
+      VISOR_IDLE_SLEEP_MIN: ${VISOR_IDLE_SLEEP_MIN:-5}   # nobody online -> simulation sleeps (0 = never)
       OPENSKY_CLIENT_ID: ${OPENSKY_CLIENT_ID:-}
       OPENSKY_CLIENT_SECRET: ${OPENSKY_CLIENT_SECRET:-}
     volumes:

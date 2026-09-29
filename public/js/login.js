@@ -1,3 +1,5 @@
+import { startRadar } from './radar-scope.js';
+
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 
@@ -69,3 +71,5 @@ fetch('/api/health').then((r) => r.json()).then((h) => {
   $('footer-version').textContent = `ATC Trainer ${h.version}`;
   if (h.copyright) $('footer-copyright').textContent = h.copyright;
 }).catch(() => {});
+
+startRadar($('radar'));

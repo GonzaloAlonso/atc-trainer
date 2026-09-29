@@ -38,13 +38,26 @@ b { font-weight: 600; }
 }
 .brand { font-weight: 700; letter-spacing: 0.18em; display: flex; align-items: center; gap: 8px; }
 .brand .sub { color: var(--accent); font-weight: 600; letter-spacing: 0.1em; }
+/* Logo: a radar scope. The ring and the centre never move; only the beam turns around the
+   centre, with a bright leading edge and a fading afterglow behind it. */
 .logo {
-  width: 18px; height: 18px; border-radius: 50%;
-  background: conic-gradient(from 0deg, var(--accent) 0 25%, transparent 25% 100%);
+  position: relative; flex: none; box-sizing: border-box;
+  width: 18px; height: 18px; border-radius: 50%; overflow: hidden;
   border: 1.5px solid var(--accent);
-  animation: sweep 3s linear infinite;
+  background: radial-gradient(circle, transparent 0 32%, rgba(92,200,255,0.35) 34% 40%, transparent 42%),
+              rgba(92,200,255,0.06);
 }
-@keyframes sweep { to { transform: rotate(360deg); } }
+.logo::before {
+  content: ""; position: absolute; inset: 0; border-radius: 50%;
+  background: conic-gradient(from 0deg, transparent 0 60%, rgba(92,200,255,0.2) 82%,
+                             rgba(92,200,255,0.75) 98%, var(--accent) 100%);
+  animation: logo-beam 3s linear infinite;
+}
+.logo::after {
+  content: ""; position: absolute; left: 50%; top: 50%; width: 3px; height: 3px;
+  margin: -1.5px 0 0 -1.5px; border-radius: 50%; background: var(--accent);
+}
+@keyframes logo-beam { to { transform: rotate(360deg); } }
 .clock { font-family: var(--mono); line-height: 1.1; }
 #clock { font-size: 16px; font-weight: 600; letter-spacing: 0.05em; }
 #date { font-size: 10px; color: var(--muted); }
